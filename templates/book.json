@@ -1,0 +1,14 @@
+{
+  "id": "{{bookId}}",
+  "title": "{{title}}",
+  "platform": "{{platform}}",
+  "genre": "{{genre}}",
+  "status": "incubating",
+  "targetChapters": {{targetChapters}},
+  "chapterWordCount": {{chapterWords}},
+  "language": "{{lang}}",
+  "createdAt": "{{createdAt}}",
+  "updatedAt": "{{createdAt}}",
+  "fanficMode": null,
+  "parentBookId": null
+}

@@ -1,0 +1,56 @@
+# ── inkos 源码本地缓存（agent 移植期使用，不进仓库）────────────────
+.inkos-src/
+
+# ── 用户实际写的书：默认放本仓库外，但若有人在 repo 内 init 也别传 ──
+books/
+inkos.json
+.env
+.env.*
+!.env.example
+
+# ── SKILL 自身评测产物（每次 iteration 体积大，不进仓库）─────────────
+novel-writer-workspace/
+evals/iteration-*/
+evals/feedback.json
+evals/benchmark.json
+evals/benchmark.md
+
+# ── Claude Code session 私有文件 ─────────────────────────────────
+.claude/
+.claude.json
+CLAUDE.local.md
+
+# ── Python ───────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# ── macOS / Windows / Linux 系统垃圾 ──────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── 常见编辑器 ────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── 临时 / 日志 ───────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+tmp/

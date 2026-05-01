@@ -1,0 +1,54 @@
+{
+  "skill_name": "novel-writer",
+  "evals": [
+    {
+      "id": 1,
+      "name": "init-xianxia-book",
+      "prompt": "我想用 novel-writer 起一本新书。番茄平台，玄幻爽文，主角穿越到修真世界但灵根全废，目标 100 章每章 3000 字。书名《废灵之上》，bookId 用 fei-ling-zhi-shang。帮我建好项目结构。",
+      "expected_output": "Skill 调用 scripts/init_book.py 创建 books/fei-ling-zhi-shang/，落地全部 templates/ 文件（含替换占位符），返回创建路径与文件列表。author_intent.md 应该写入用户的简短题材描述。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "write-first-chapter-golden-opening",
+      "prompt": "刚才那本《废灵之上》，先把第 1 章写出来，黄金开场，主角醒来发现穿越且灵根全废，要在 3000 字内立住主角性格、抛出第一个钩子（比如有个神秘人物注视他）。",
+      "expected_output": "Skill 走完主循环：plan（生成 chapter_memo with isGoldenOpening=true）→ compose → write → length normalize 到 2700-3300 字 → audit-revise（最多 3 轮，过 85 分）→ observe + settle → apply_delta 校验 → 章节落到 books/fei-ling-zhi-shang/chapters/0001.md，story/state/*.json 更新。章节读起来不像 AI 写的（5 铁律生效）。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "audit-and-polish-existing-chapter",
+      "prompt": "你刚写的第 1 章我读了一遍，整体可以但有几处 \"仿佛\"、\"竟然\" 用得太密，台词也偏 AI 腔。用 polish 模式改一下，别动情节。",
+      "expected_output": "Skill 直接跳到 phase 09 audit + phase 10 reviser polish 模式（不动情节）。ai_tell_scan.py 应识别出转折标记词超阈值。reviser 输出修订版，章节字数仍在 soft range。",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "fanfic-init-cp-mode",
+      "prompt": "我想写《XXXX》（虚构原作）的同人，CP 模式，配对是 A 和 B。我会把原作设定 txt 给你。先帮我从这份 txt 里抽 fanfic_canon.md，然后给我建一个新书项目，bookId 用 xxx-fanfic-cp。原作 txt 内容如下：\n\n[A 是某门派大师兄，性格冷峻话少，口头禅 \"无妨\"。B 是从外门捡回来的小师妹，活泼，喜欢用 \"呢\" 字结尾。两人因一次秘境历险互相救命，关系从不熟到默契。世界观有灵气和五行相克，A 是火灵根，B 是水灵根。]",
+      "expected_output": "Skill 先调 init_book.py --fanfic-mode cp。然后 Claude 跑 fanfic_canon_importer prompt 抽 5 段（world_rules / character_profiles / key_events / power_system / writing_style），写到 books/xxx-fanfic-cp/story/fanfic_canon.md。character_profiles 表必须捕到 A 的 \"无妨\"、B 的 \"呢\" 这两个语癖。书初始化完成后告知用户进入 CP 模式：dim 36 严苛、dim 37 放松。",
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "style-import-and-write",
+      "prompt": "用这段参考文本做风格模仿（建到上面那本《废灵之上》上），然后用模仿后的风格写第 2 章。参考文本：\n\n[山雨忽至。他立在檐下，看着雨脚把青石板打湿，没有动。一柄剑斜在身侧，剑鞘上的漆已经斑驳。雨声很大，却盖不住他喉咙里那一点轻不可闻的笑。\"这就来了。\" 他这么对自己说。\"快了。\"]",
+      "expected_output": "Skill 先跑 scripts/style_analyze.py 生成 style_profile.json（应该捕到偏短句、对话多、叙事人称为第三人称有限），再跑定性 LLM 分析写 story/style_guide.md（8 段中至少 6 段有原文例句佐证）。然后进入主循环写第 2 章，Writer prompt 注入 style_guide + style_fingerprint，输出章节句长应明显偏短。",
+      "files": []
+    },
+    {
+      "id": 6,
+      "name": "should-not-trigger-product-doc",
+      "prompt": "帮我写一个产品需求文档（PRD），关于公司即将上线的新版后台权限系统。",
+      "expected_output": "Skill 应**不触发**——这是产品文档不是网文。Claude 用其他方式（普通对话或 docx skill）回答。",
+      "files": []
+    },
+    {
+      "id": 7,
+      "name": "should-not-trigger-poetry",
+      "prompt": "帮我写一首七律，主题是中年怀古。",
+      "expected_output": "不触发 novel-writer——这是诗词不是网文章节。",
+      "files": []
+    }
+  ]
+}
