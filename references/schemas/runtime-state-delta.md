@@ -207,6 +207,31 @@ Settler 阶段的输出契约。来源：`models/runtime-state.ts` L127-142（Zo
 
 ---
 
+## 9b. `hookOps.upsert` 与 promotion 子系统的关系
+
+`hookOps.upsert` 不是"自由开新 hook 的入口"——它只能在**已被 promotion 子系统升级**的 hook 上动手。两条数据通道分得很清楚：
+
+| 类别 | 写到哪 | 谁负责写 | 谁能读 |
+|---|---|---|---|
+| 原始 seed（architect / observer 候选，没升过级） | `story/runtime/hook-seeds.json` | architect、`hook_governance --command promote-pass` 维护 | composer 装 context 时**可以**读，但 `pending_hooks.md` 里**不会**出现 |
+| 升级后的 hook（promoted=true） | `story/state/hooks.json`，并被 apply_delta 渲染到 `story/pending_hooks.md` | settler 通过 `hookOps.upsert` 推进；promote-pass 在升级时一次性补 `promoted=true` | writer / auditor / reviser 都读 |
+
+### Settler 必须遵守的两条延伸规则
+
+1. **`hookOps.upsert` 引用的 `hookId` 必须先在 `hooks.json` 中存在**。如果 settler 想推进的伏笔目前还只是 seed（即 `hooks.json` 里查不到），settler 应改写到 `newHookCandidates`，由后续的 `hook_governance --command promote-pass` 决定是否提升进 ledger。直接 upsert 一个仅存在于 `hook-seeds.json` 的 id 会被 apply_delta 警告（`stale_ledger_row`），并在下一次 validate 中复发。
+2. **不要在 settler 里手设 `promoted=true`**。`promoted` 是治理层的输出而非 settler 输入；settler 透传旧值即可，新值由 promote-pass 写。
+
+### 为什么这样设计
+
+如果允许任何 seed 都直接落进 `pending_hooks.md`：
+- 几章后 ledger 会被一次性观察候选淹没（observer 每章可能输出 5+ 候选）；
+- 没有 dependsOn / coreHook / advanced ≥ 2 / cross-volume 任一信号的伏笔会停留为永久"信息噪声"，让 reviewer 误读；
+- `chapter_summaries.json#hookActivity` 中的 token 集合会膨胀到无法对账。
+
+promotion 闸口确保 ledger 里**每一条都至少有一个被读者持续追踪的理由**。详见 [`references/hook-governance.md`](../hook-governance.md)。
+
+---
+
 ## 10. 校验硬规则（来自 settler-prompts.ts §"规则"块）
 
 1. 只输出增量，不要重写完整 truth files

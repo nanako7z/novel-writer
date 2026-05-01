@@ -41,7 +41,16 @@ function writeNextChapter(book):
 
     # ── 3. Compose ─────────────────────────────────────────
     # references/phases/03-composer.md（无 LLM）
-    contextPkg, ruleStack, trace = runComposer(chapterMemo, all truth files)
+    # 3a. 先取滑窗记忆（避免 30+ 章后全量 chapter_summaries 爆 context）
+    memory = scripts/memory_retrieve.py --book <bookDir> \
+                --current-chapter chapterNo \
+                [tunables based on chapter_memo flags：
+                 isGoldenOpening → window-recent=2 window-relevant=0
+                 cliffResolution → --include-resolved-hooks
+                 arcTransition  → window-relevant=12]
+    # 3b. 装配 context_pkg + rule_stack（吃 memory + 题材 profile）
+    genreProfile = templates/genres/{book.genre}.md   # 若 id 不在 catalog 回退 other.md
+    contextPkg, ruleStack, trace = runComposer(chapterMemo, memory, genreProfile, truth files)
     # 落盘：story/runtime/chapter-{NNNN}.context.json
     #       story/runtime/chapter-{NNNN}.rule-stack.json
     #       story/runtime/chapter-{NNNN}.trace.json
@@ -123,12 +132,47 @@ function writeNextChapter(book):
     delta = runSettler(draft, observations, current truth files)
     # 落盘：story/runtime/chapter-{NNNN}.delta.json
 
-    # ── 10. 校验并应用 delta（确定性）──────────────────────────
+    # ── 10. 校验并应用 delta（确定性 + hook 治理闸门）──────────
+    # apply_delta 内部会自动调 hook_governance.py 的 validate + stale-scan
     result = scripts/apply_delta.py --book <bookDir> --delta story/runtime/chapter-{NNNN}.delta.json
     if result.exitCode != 0:
-        # delta 不合规：退回到 settler 重写一次；仍不行则人工
-        delta = runSettlerWithRetry(...)
+        # 两类失败：
+        #  · delta 不合规 schema → 退回 settler 重写一次
+        #  · result.hookGovernanceBlocked == True → 治理 critical（如 depends_on 环、
+        #    pending_hooks.md 引用对不上）→ 让 Settler 改 delta，不能强落盘
+        delta = runSettlerWithRetry(governanceFeedback=result.hookGovernance.validate.issues)
         retry once
+
+    # 10.1 Hook seed → ledger 推升（4 条 OR 条件）
+    # 让本章 Settler 产出的新 hookCandidates 在下章 Composer 看到之前就经过门槛
+    scripts/hook_governance.py --book <bookDir> --command promote-pass --current-chapter chapterNo
+
+    # ── 10.5. （可选）Polisher 文字层打磨 ───────────────────────
+    # references/phases/11-polisher.md
+    # 仅在 audit 真正过线（非借线）时入场，磨表面不改结构。
+    POLISH_THRESHOLD = 88           # 借线（85-87）跳过，不冒不必要的风险
+    if passed and audit.overall_score >= POLISH_THRESHOLD:
+        polishResult = runPolisher(
+            chapterContent = draft,         # audit 通过的最终态
+            chapterMemo,
+            genreProfile.fatigueWords,
+            language = book.language
+        )
+        if polishResult.changed:
+            # 备份 audit 通过的原版本，准备覆盖
+            write story/runtime/chapter-{NNNN}.pre-polish.md = draft
+            postScan = ai_tell_scan + sensitive_scan on polishResult.polishedContent
+            if postScan introduced new critical/block:
+                # Polisher 引入了新问题——回退
+                draft 保持原状（pre-polish 备份保留作证据）
+                log status = "polish-reverted-introduced-issues"
+            else:
+                draft = polishResult.polishedContent  # 剥掉 [polisher-note] 行
+                # polisher-note 进 polish.json 的 polisherNotes，下一章 Planner 读
+        # 元数据：story/runtime/chapter-{NNNN}.polish.json
+    elif passed:
+        log polish: skipped (borderline score=<n>)
+    # audit 未过则根本不到这一步——Reviser 已经在 step 7 处理过了
 
     # ── 11. 最终落盘章节正文 ─────────────────────────────────
     write chapters/{NNNN}.md = draft
@@ -151,6 +195,7 @@ function writeNextChapter(book):
 | "写第 N 章 / 写下一章" | 上面整个 writeNextChapter 主循环 |
 | "审一下第 N 章" | 单独跑 phase 09，不进 reviser |
 | "改一下这一章 / 用 polish 模式改" | 单独跑 phase 09 + 10，按用户给的模式或 auto |
+| "整章 polish / 文字打磨一遍" | 直接跑 [phase 11 polisher](11-polisher.md)（绕过 audit 借线规则） |
 | "学一下这段文字的风格" | `references/branches/style.md` 的 analyze + import |
 | "更新一下设定 / 重做架构" | phase 04 architect 单跑 |
 | "看一下当前进度" | 不进 phase；读 `story/state/manifest.json` + `chapter_summaries.json` 直接答 |
@@ -159,9 +204,10 @@ function writeNextChapter(book):
 
 1. **真理文件只能经 `scripts/apply_delta.py` 修改**——直接编辑 `story/state/*.json` 视为脏写，会被 manifest 校验发现。
 2. **章节正文落盘前必须经过 step 7（audit-revise 回环）**——即便 audit 失败也要标 `status: "audit-failed-best-effort"`，不要悄悄写盘。
-3. **每个 phase 的产物都先写到 `story/runtime/`，最终章节 + delta 才落到 `chapters/` 与 `story/state/`**——保证可回溯、可重跑。
-4. **任何阶段的 LLM 输出若解析失败，重试 ≤ 该阶段上限（Planner 3、Architect 2、audit-revise 整轮 3）**，不要无限重试。
-5. **Reflector 不是单独阶段**——README 提到了，但源码里它的职责并入了 audit-revise loop（"反思+修改"是同一阶段的两面）；本 SKILL 也合并不单列。
+3. **Polisher（step 10.5，见 [11-polisher.md](11-polisher.md)）只在 audit 真正过线时入场**——借线（score 85-87）跳过；audit 未过则压根不进 Polisher，由 Reviser 兜底。Polisher 单 pass，不开回环，引入新问题即回退。
+4. **每个 phase 的产物都先写到 `story/runtime/`，最终章节 + delta 才落到 `chapters/` 与 `story/state/`**——保证可回溯、可重跑。
+5. **任何阶段的 LLM 输出若解析失败，重试 ≤ 该阶段上限（Planner 3、Architect 2、audit-revise 整轮 3）**，不要无限重试。
+6. **Reflector 不是单独阶段**——README 提到了，但源码里它的职责并入了 audit-revise loop（"反思+修改"是同一阶段的两面）；本 SKILL 也合并不单列。
 
 ## 何时**跳过**主循环
 

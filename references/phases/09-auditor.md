@@ -84,6 +84,25 @@ Auditor 进入时必须能读到下列文件 / 上下文：
 
 英文 prompt（逐字版本见 `continuity.ts` L457-493）保持等价。Claude 在执行本阶段时按 `book.json#language` 选择中/英 system prompt。
 
+### 2.5 题材维度过滤（Genre Profile）
+
+Auditor 进入时按 `references/phases/05-writer.md §11.5` 同样的 loader 读 `templates/genres/<book.genre>.md`（项目级 override 优先），把 `gp.auditDimensions` 与 `gp.numericalSystem` / `gp.powerScaling` / `gp.eraResearch` 三个 toggle 全部装进 prompt 装配：
+
+1. **维度白名单**：把全局 37 维清单与 `gp.auditDimensions` 数组**取交集**——只有 id 同时在两边的维度才进 system prompt 的"审查维度"列表。例如 `xianxia.md` 的 `auditDimensions: [1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,24,25,26]` 会让 dim 12（年代考据）、dim 20-23（段落 / 套话 / 转折 / 列表）、dim 27（敏感词 LLM 审）都不进 prompt（敏感词仍由确定性脚本兜底）。
+2. **三个 toggle 的强制激活**（独立于白名单，最终是"白名单 ∪ 强制激活 ∩ mode 触发"）：
+   - `gp.numericalSystem == true` → 强制激活 dim 5（数值检查）；同时让 user prompt 中追加 `particle_ledger.md` 区块。
+   - `gp.powerScaling == true` → 强制激活 dim 4（战力崩坏）；user prompt 把 `current_state.json#power level` 单独抽出来。
+   - `gp.eraResearch == true` → 强制激活 dim 12（年代考据）；同时在 system prompt 注入"联网搜索许可"段（允许使用 search_web / fetch_url，要求 ≥ 2 来源交叉）。
+3. **mode 后置过滤**：上面两步取出的活跃集再按 mode 过滤（参考 `references/audit-dimensions.md` 的 Dimension activation matrix）：
+   - 非 spinoff 关闭 28-31；非 fanfic 关闭 34-37；fanfic 模式自动关 28-31 同时开 34-37。
+   - dim 32-33 永远 always-active（universal），不受白名单约束。
+4. **`gp.satisfactionTypes` / `gp.fatigueWords`**：不进维度白名单，但作为对应维度的"判定参照"塞进 `buildDimensionNote`：
+   - dim 10（词汇疲劳）的 note 拼出 `gp.fatigueWords`（叠加全局 AI 标记词），单章 >1 次即 warning。
+   - dim 15（爽点虚化）的 note 拼出 `gp.satisfactionTypes`，要求 Auditor 检查本章爽点是否在清单内，并且兑现度是否超过 70% 期待。
+5. **加载失败回退**：`gp` 解析失败 → 退到 `other.md`，但要在 audit summary 末尾标注 `genre-fallback=other`，提醒用户 `book.json#genre` 配错。
+
+> 完整字段语义、自定义题材方法、catalog 列表见 `references/genre-profile.md`；37 维各条触发条件见 `references/audit-dimensions.md`（其"适用条件"列必须**与 `gp.auditDimensions` 取交集**后再用）。
+
 ### 3. 37-dimension 评估
 
 Auditor 不是固定跑 37 条，而是按 mode 动态构建活跃维度集。完整维度名 / 真理文件 / 检查要点 / 模式触发表见：

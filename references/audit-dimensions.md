@@ -2,6 +2,8 @@
 
 > 端口自 `inkos` 的 `agents/continuity.ts`（DIMENSION_LABELS L40-78、buildDimensionNote L123-283、buildDimensionList L285-365）+ `agents/fanfic-dimensions.ts`。Auditor 在 prompt 中按 mode 动态拼出"活跃维度清单"，每条形如 `<id>. <中文名>（<note>）`。
 
+> **题材过滤（必读）**：下表每行的「适用条件」列描述的是该维度在全局 inkos 流水线下的**最大启用范围**（universal / spinoff / fanfic / 三大 toggle 触发等）。实际进入 Auditor system prompt 的活跃维度还要**与 `genreProfile.auditDimensions` 取交集**——id 不在该数组里的维度不会被询问。同时 `genreProfile.numericalSystem` / `powerScaling` / `eraResearch` 三个 toggle 即便不在 `auditDimensions` 里出现，也会**强制激活**对应的 dim 5 / 4 / 12（参 `references/genre-profile.md` 与 `references/phases/09-auditor.md §2.5`）。本表整体保持完整、不按题材裁剪——题材层面的开关在 Auditor 装配时统一处理。
+
 ## 维度全表
 
 下表每条维度的「适用条件」与「读取的真理文件」综合自 `buildDimensionNote` / `buildDimensionList` 与 auditor user prompt 中的 block 装配（`continuity.ts` L532-617）。

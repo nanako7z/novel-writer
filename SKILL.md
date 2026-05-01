@@ -1,6 +1,6 @@
 ---
 name: novel-writer
-description: 中文网文写作工作流（移植自 inkos CLI）。当用户要写小说、网文、同人或长篇虚构故事时使用，覆盖项目初始化、写下一章、审章/改章、风格模仿、同人 canon/AU/OOC/CP 设置等场景。流水线 Plan → Compose → (Architect) → Write → Normalize → Audit → Revise → Observe → Settle，含 37 个审计维度、9 类事实追踪、四级规则栈、去 AI 味与敏感词扫描。即使用户没明说"用 novel-writer"，只要意图是写网文章节、做长篇连载、做同人创作或做风格模仿写作，都应主动用此 skill。**不要触发**于一次性短文、产品文档、PRD、技术博客、诗词歌赋、剧本/编剧、学术论文这类非长篇虚构连载的场景。
+description: 中文网文写作工作流（移植自 inkos CLI）。当用户要写小说、网文、同人或长篇虚构故事时使用，覆盖项目初始化、写下一章、审章/改章、风格模仿、同人 canon/AU/OOC/CP 设置、伏笔治理、章节文字打磨等场景。流水线 Plan → Compose → (Architect) → Write → Normalize → Audit → Revise → Settle → (Polish)，含 15 个题材 profile、37 个审计维度、9 类事实追踪、四级规则栈、伏笔生命周期治理、滑窗记忆、去 AI 味与敏感词扫描。即使用户没明说"用 novel-writer"，只要意图是写网文章节、做长篇连载、做同人创作或做风格模仿写作，都应主动用此 skill。**不要触发**于一次性短文、产品文档、PRD、技术博客、诗词歌赋、剧本/编剧、学术论文这类非长篇虚构连载的场景。
 ---
 
 # novel-writer
@@ -71,10 +71,11 @@ python {SKILL_ROOT}/scripts/init_book.py \
 详细伪代码 + 顺序见 [references/phases/00-orchestration.md](references/phases/00-orchestration.md)。简版：
 
 ```
-Plan → Compose → (首章/卷尾才 Architect) → Write
+Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect) → Write
      → Normalize（脚本 + 必要时 phase 08）
      → Audit-Revise（最多 3 轮，分数提升 < 3 即退出）
-     → Observe → Settle → apply_delta 校验落盘
+     → Observe → Settle → apply_delta 校验（含 hook 治理闸门）
+     → (audit 真正过线 ≥88 时跑 Polisher 文字打磨)
      → 章节正文写入 chapters/{NNNN}.md
 ```
 
@@ -83,14 +84,15 @@ Plan → Compose → (首章/卷尾才 Architect) → Write
 | Phase | 文件 | 摘要 |
 |---|---|---|
 | 02 | [planner](references/phases/02-planner.md) | 生成 chapter_memo（YAML+md），定义本章要兑现什么、不做什么 |
-| 03 | [composer](references/phases/03-composer.md) | 装配 context_pkg + rule_stack（无 LLM） |
+| 03 | [composer](references/phases/03-composer.md) | 装配 context_pkg + rule_stack（无 LLM；先调 `memory_retrieve.py` 取滑窗） |
 | 04 | [architect](references/phases/04-architect.md) | 散文密度的基础设定（首章 / 卷切换才跑） |
-| 05 | [writer](references/phases/05-writer.md) | 写正文，13-14 段 prompt 模块化拼装 |
+| 05 | [writer](references/phases/05-writer.md) | 写正文，13-14 段 prompt 模块化拼装 + 题材 profile 注入 |
 | 06 | [observer](references/phases/06-observer.md) | 抽 9 类事实，输出 OBSERVATIONS 块 |
 | 07 | [settler](references/phases/07-settler.md) | 产 RuntimeStateDelta JSON |
 | 08 | [normalizer](references/phases/08-normalizer.md) | 单次长度修正 |
-| 09 | [auditor](references/phases/09-auditor.md) | 37 维审计 + 评分 |
+| 09 | [auditor](references/phases/09-auditor.md) | 37 维审计（按题材 profile 过滤）+ 评分 |
 | 10 | [reviser](references/phases/10-reviser.md) | 6 模式修订（auto/polish/rewrite/rework/anti-detect/spot-fix） |
+| 11 | [polisher](references/phases/11-polisher.md) | audit 真正过线（≥88）后的文字层打磨，单 pass、不动情节 |
 
 **主循环关键不变量**（违反就停下）：
 
@@ -106,9 +108,12 @@ Plan → Compose → (首章/卷尾才 Architect) → Write
 |---|---|
 | "审一下第 N 章" | 只跑 [phase 09](references/phases/09-auditor.md)；输出审计结果，不动正文 |
 | "把 XX 句改成 YY" | [phase 10 reviser](references/phases/10-reviser.md) `spot-fix` 模式 |
-| "整章 polish" | phase 09 + 10 polish 模式（不动情节） |
+| "整章 polish / 文字打磨一遍" | 直接跑 [phase 11 polisher](references/phases/11-polisher.md)（绕过 audit 借线规则） |
+| "用 reviser polish 模式改" | phase 09 + 10 polish 模式（结构层修订，不动情节） |
 | "AI 味太重，专项处理" | phase 10 `anti-detect` 模式，先跑 `scripts/ai_tell_scan.py` 拿证据 |
 | "重做架构" | phase 04 architect 单跑 |
+| "看下伏笔池压力 / 伏笔健康度" | `python scripts/hook_governance.py --book <bookDir> --command health-report` |
+| "校验一下真理文件没问题吧" | `python scripts/hook_governance.py --book <bookDir> --command validate` |
 | "看一下当前进度" | 读 `story/state/manifest.json` + `chapter_summaries.json`，直接答 |
 
 ## 同人 / 风格分支
@@ -141,13 +146,36 @@ python {SKILL_ROOT}/scripts/sensitive_scan.py --file <draft.md>
 python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <runtime/chapter-NNNN.delta.json>
 ```
 
-脚本会做 schema 校验（拒绝不合规 JSON），原子写入（`.tmp` + rename），并按字段路由到对应文件。schema 详见 [references/schemas/runtime-state-delta.md](references/schemas/runtime-state-delta.md)。
+脚本会做 schema 校验（拒绝不合规 JSON），原子写入（`.tmp` + rename），按字段路由到对应文件，并**自动调用** `hook_governance.py` 的 `validate` + `stale-scan` 作为闸门：
+
+- `validate` 报 critical → 退出码 1，`hookGovernanceBlocked: true`，要求 Settler 重写而不是落盘
+- `stale-scan` 标记过期钩子 → 不阻断，但写回 `stale: true` 标志供后续 Planner 参考
+- 想跳过治理（不推荐）：`apply_delta.py --skip-hook-governance`
+
+schema 详见 [references/schemas/runtime-state-delta.md](references/schemas/runtime-state-delta.md)；钩子治理逻辑见 [references/hook-governance.md](references/hook-governance.md)。
 
 直接编辑 `story/state/*.json` 视为脏写，会污染 manifest，**禁止**。
 
-## 规则栈
+## 规则栈与题材 profile
 
 四级覆盖：L1 题材 → L2 全书 → L3 章节 → L4 runtime（Planner 当前指令）。详见 [references/rule-stack.md](references/rule-stack.md)。Writer 全读，Reviser 守 L1+L2+L3，Auditor 强制 L1 / 警告 L2 / 软引导 L3。
+
+**L1 题材的具体形状**来自 `templates/genres/<book.genre>.md`——15 个内置 profile（仙侠、玄幻、都市、科幻、异世界、塔爬、地牢核、修仙、进展流、惊悚、温馨、罗曼塔、LitRPG、系统末日、其他）。每个 profile 含：fatigueWords（注入 Writer 的反 AI 词表）、chapterTypes、satisfactionTypes、pacingRule、auditDimensions（限定 Auditor 的 37 维子集）、numericalSystem/powerScaling/eraResearch 三个 toggle。题材 id 不在 catalog 内会回退 `other.md`。详见 [references/genre-profile.md](references/genre-profile.md)。
+
+## 滑窗记忆
+
+Composer 阶段第 0 步必须先调：
+
+```bash
+python {SKILL_ROOT}/scripts/memory_retrieve.py \
+  --book <bookDir> --current-chapter N \
+  [--window-recent 6] [--window-relevant 8] \
+  [--include-resolved-hooks] [--format json|markdown]
+```
+
+输出包含：近窗章节摘要（全文）、相关窗章节摘要（按角色 / hook 重叠筛选，仅 events 字段）、活跃钩子、最近还的钩子（可选）、角色花名册、当前状态快照。
+
+不直接读全部 chapter_summaries 是为了让 30+ 章后 context 不爆。算法说明与可调参见 [references/memory-retrieval.md](references/memory-retrieval.md)。
 
 ## 文件树速查
 
@@ -155,15 +183,29 @@ python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <runtime/cha
 {SKILL_ROOT}/
 ├── SKILL.md                     ← 你正在读
 ├── references/
-│   ├── phases/00-10-*.md        各阶段 prompt 与契约
+│   ├── phases/00-11-*.md        12 个阶段（编排 + radar + 10 agent + polisher）
 │   ├── branches/{fanfic,style}.md
 │   ├── rule-stack.md            四级规则栈
-│   ├── audit-dimensions.md      37 维度全表
+│   ├── genre-profile.md         15 题材 profile schema + 注入指南
+│   ├── audit-dimensions.md      37 维度全表（按题材 profile 过滤）
 │   ├── ai-tells.md              去 AI 味词表与阈值
 │   ├── sensitive-words.md       三级敏感词
+│   ├── hook-governance.md       伏笔生命周期 + 4 治理命令
+│   ├── memory-retrieval.md      滑窗记忆算法
 │   └── schemas/                 4 个数据形状
-├── templates/                   init 用的种子文件
-├── scripts/                     6 个 Python 脚本
+├── templates/
+│   ├── inkos.json + book.json   元数据种子
+│   ├── story/{*.md, state/*.json}  真理文件种子
+│   └── genres/                  15 题材 profile（init 时按 --genre 选用）
+├── scripts/                     8 个 Python 脚本
+│   ├── init_book.py             创建 books/<id>/ 子树
+│   ├── apply_delta.py           真理文件唯一写入闸门（含 hook governance）
+│   ├── hook_governance.py       promote-pass / stale-scan / validate / health-report
+│   ├── memory_retrieve.py       Composer 阶段 0 调
+│   ├── word_count.py            LengthSpec 区间判定
+│   ├── style_analyze.py         5 项纯文本风格统计
+│   ├── ai_tell_scan.py          去 AI 味确定性闸门
+│   └── sensitive_scan.py        三级敏感词扫描
 └── evals/evals.json             SKILL 自身的 7 个测试 prompt
 ```
 

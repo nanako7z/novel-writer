@@ -8,10 +8,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 VALID_HOOK_OPS = {"upsert", "mention", "resolve", "defer"}
+
+HOOK_GOVERNANCE_SCRIPT = Path(__file__).resolve().parent / "hook_governance.py"
 
 
 def err(msg: str, code: int = 1) -> "None":
@@ -128,7 +131,40 @@ def parse_args() -> argparse.Namespace:
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--delta", help="path to delta JSON file")
     g.add_argument("--delta-stdin", action="store_true")
+    p.add_argument(
+        "--skip-hook-governance",
+        action="store_true",
+        help="skip the post-write hook_governance validate+stale-scan pass",
+    )
     return p.parse_args()
+
+
+def run_hook_governance(book: Path, command: str, current_chapter: int | None = None) -> dict:
+    """Invoke scripts/hook_governance.py as a subprocess, return parsed JSON.
+
+    On hard errors (non-zero exit) return a sentinel dict with `ok: False` so
+    apply_delta can decide how to react without crashing.
+    """
+    if not HOOK_GOVERNANCE_SCRIPT.exists():
+        return {"ok": False, "error": "hook_governance.py missing"}
+    cmd = [sys.executable, str(HOOK_GOVERNANCE_SCRIPT),
+           "--book", str(book), "--command", command]
+    if current_chapter is not None:
+        cmd += ["--current-chapter", str(current_chapter)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as e:
+        return {"ok": False, "error": f"hook_governance subprocess failed: {e}"}
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "error": f"hook_governance {command} exit={proc.returncode}",
+            "stderr": proc.stderr.strip(),
+        }
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"hook_governance bad JSON: {e}"}
 
 
 def main() -> int:
@@ -224,12 +260,46 @@ def main() -> int:
             append_text(note_p, str(n))
         modified.append(str(note_p))
 
+    # ── hook governance gate ────────────────────────────────────────────
+    # After writing all delta-derived state, run validate + stale-scan.
+    # validate's critical findings block the commit (we already wrote files,
+    # but caller is expected to inspect exit code before promoting the draft
+    # to chapters/{NNNN}.md).  Warnings/info are surfaced but non-blocking.
+    governance_report: dict = {}
+    governance_blocked = False
+    if not args.skip_hook_governance:
+        chapter_for_scan = None
+        if "chapterSummary" in delta and isinstance(delta["chapterSummary"], dict):
+            ch = delta["chapterSummary"].get("chapter")
+            if isinstance(ch, int):
+                chapter_for_scan = ch
+
+        validate_out = run_hook_governance(book, "validate", chapter_for_scan)
+        stale_out = run_hook_governance(book, "stale-scan", chapter_for_scan)
+        governance_report = {
+            "validate": validate_out,
+            "staleScan": stale_out,
+        }
+        if isinstance(validate_out, dict) and validate_out.get("ok"):
+            crit = (validate_out.get("counts") or {}).get("critical", 0)
+            if crit > 0:
+                governance_blocked = True
+                warnings.append(
+                    f"hook_governance validate flagged {crit} critical issue(s); "
+                    "delta written to disk but caller should NOT promote draft."
+                )
+        elif isinstance(validate_out, dict) and not validate_out.get("ok"):
+            # Hard governance error: surface as warning but do not crash apply_delta.
+            warnings.append(f"hook_governance validate failed: {validate_out.get('error')}")
+
     print(json.dumps({
         "applied": True,
         "filesModified": sorted(set(modified)),
         "warnings": warnings,
+        "hookGovernance": governance_report,
+        "hookGovernanceBlocked": governance_blocked,
     }, ensure_ascii=False, indent=2))
-    return 0
+    return 1 if governance_blocked else 0
 
 
 if __name__ == "__main__":

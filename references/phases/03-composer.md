@@ -15,16 +15,48 @@ Claude 在这一阶段需要读：
 - `story/outline/story_frame.md` + `story/outline/volume_map.md` ——卷纲（如果不存在，回退 `story_bible.md` / `volume_outline.md`）
 - `story/parent_canon.md` ——续作 / 父书 canon（如果存在）
 - `story/fanfic_canon.md` ——同人原作设定（如果存在）
-- `story/chapter_summaries.md` ——最近 3-5 章 title / mood / chapterType
 - `chapters/{近 3 章}.md` ——最近 3 章正文末句（结尾 trail，避免结构重复）
-- `story/state/hooks.json` ——根据 memo.threadRefs 抽出对应 hook 的债务简报
-- `story/state/current_state.json` ——硬事实（数值、关系等）
+- `scripts/memory_retrieve.py` 输出 ——滑窗记忆（recent + relevant summaries / active hooks / character roster / current_state snapshot）。**这个替代了原先"通读全部 chapter_summaries"的做法**；详见 [references/memory-retrieval.md](../memory-retrieval.md)
+- `story/state/hooks.json` ——根据 memo.threadRefs 抽出对应 hook 的债务简报（只取 memory_retrieve 输出之外、threadRefs 显式点名的那几个 hookId）
 
 ## Process
 
 Composer 是确定性的"读 + 拼"流程，Claude 不需要自由发挥；它扮演一个"图书管理员"，按以下步骤把上下文打包。
 
 ### 工作步骤
+
+#### 0. 跑 memory_retrieve（**先于一切其他读**）
+
+Composer 不再"把所有 chapter_summaries 全读一遍"——那在 30 章后就开始挤 token。换成调脚本拿"滑窗记忆"：
+
+```bash
+python {SKILL_ROOT}/scripts/memory_retrieve.py \
+  --book <bookDir> \
+  --current-chapter N \
+  [--window-recent 6] \
+  [--window-relevant 8] \
+  [--include-resolved-hooks] \
+  --format json
+```
+
+输出 JSON 形状见 [references/memory-retrieval.md#输出-schema](../memory-retrieval.md#输出-schema)。Composer 把这份 JSON 当作"记忆维度"的主输入；step 2 的 selectedContext 表里 row 9–11、13–15 就直接从这份 JSON 里取（不再各自重读 `chapter_summaries.md` 全文）。
+
+##### Memory window — 怎么挑窗口大小
+
+读 chapter_memo 的几个标志位决定调参：
+
+| memo 标志 | 调用方式 |
+|---|---|
+| `isGoldenOpening: true`（首章 / 卷首） | `--window-recent 3 --window-relevant 4` |
+| `cliffResolution: true`（即将回收 core hook） | `--window-recent 6 --window-relevant 12 --include-resolved-hooks` |
+| 上一章刚 resolve 了 hook（"余响"章） | `--window-recent 6 --window-relevant 6 --include-resolved-hooks` |
+| `arcTransition: true`（新卷 / 新弧线开篇） | `--window-recent 8 --window-relevant 12` |
+| 节奏 / 关系日常章（`chapterType` ∈ {日常, 节奏调整}） | `--window-recent 4 --window-relevant 4` |
+| 默认 | 不传窗口参数，用脚本默认值 6 / 8 |
+
+判定优先级：cliffResolution > isGoldenOpening > arcTransition > 余响 > 日常 > 默认。多个同时为真极少见，按优先级取最高那一档。
+
+调参依据写到 `chapter_trace.composerInputs`，方便后期 audit / replay。
 
 #### 1. 推导 retrievalHints
 
@@ -50,12 +82,12 @@ retrievalHints = [memo.goal, memo.outlineNode, ...memo.threadRefs].filter(truthy
 | 6    | `story/outline/volume_map.md`       | Anchor the default planning node for this chapter.                              | 优先含 `memo.outlineNode` 的段                                            |
 | 7    | `story/parent_canon.md`             | Preserve parent canon constraints (续作 / spinoff).                            | 首段                                                                    |
 | 8    | `story/fanfic_canon.md`             | Preserve extracted fanfic canon constraints.                                    | 首段                                                                    |
-| 9    | `story/chapter_summaries.md#recent_titles` | Avoid repetitive chapter naming.                                          | 最近 5 章 `chapter: title` 用 ` \| ` 拼接                                 |
-| 10   | `story/chapter_summaries.md#recent_mood_type_trail` | Mood / chapterType cadence visibility.                            | 最近 5 章 `chapter: mood / chapterType` 拼接                              |
+| 9    | `memory_retrieve#recent_titles`     | Avoid repetitive chapter naming.                                                | `recentSummaries` 末 5 条的 `chapter: title` 用 ` \| ` 拼接                |
+| 10   | `memory_retrieve#recent_mood_type_trail` | Mood / chapterType cadence visibility.                                     | `recentSummaries` 末 5 条的 `chapter: mood / chapterType` 拼接             |
 | 11   | `story/chapters#recent_endings`     | Show how recent chapters ended (avoid 3 连续 collapse endings).                  | 最近 3 章末句各取最后一句（>60 字截断为 57 字 + "..."）                          |
-| 12   | `runtime/hook_debt#<hookId>`        | Narrative debt brief with original seed text.                                   | 对每个 `memo.threadRefs` 中存在于 hooks.json 的 hookId，渲染下方"hook debt 简报" |
-| 13   | `story/current_state.md#<predicate>` | Relevant current-state fact retrieved.                                         | memorySelection.facts（与 hint 匹配的硬事实行）                              |
-| 14   | `story/chapter_summaries.md#<chapter>` | Relevant episodic memory.                                                    | memorySelection.summaries（与 hint 匹配的旧章摘要）                          |
+| 12   | `runtime/hook_debt#<hookId>`        | Narrative debt brief with original seed text.                                   | 对每个 `memo.threadRefs` 中存在于 `activeHooks` 的 hookId，渲染下方"hook debt 简报" |
+| 13   | `memory_retrieve#facts`             | Relevant current-state fact retrieved.                                          | `currentState.facts` 中与 hint 匹配的硬事实行                                 |
+| 14   | `memory_retrieve#relevant_summaries` | Relevant episodic memory（events-only）.                                       | `relevantSummaries`（脚本已按 character/hook 重叠筛选并截到 events）             |
 | 15   | `story/volume_summaries.md#<anchor>` | Long-span arc memory compressed from earlier volumes.                          | 卷级摘要（如果有）                                                          |
 | 16   | `story/pending_hooks.md#<hookId>`   | Carry forward unresolved hooks that match the chapter focus.                    | type \| status \| expectedPayoff \| payoffTiming \| notes 拼接          |
 

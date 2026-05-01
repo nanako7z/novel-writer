@@ -1,0 +1,185 @@
+# Hook 治理（Hook Governance）
+
+伏笔从"被想到"到"被回收"要经过五个生命阶段。任何阶段越级跳，都会让 `pending_hooks.md` 变成噪声、让 settler 凭空捏造 hookId，或让 reviewer 查不到票根。本文件给出**确定性规则 + 唯一可执行入口**：`scripts/hook_governance.py`。
+
+> 这不是 LLM 阶段。本治理子系统是纯 Python，stdlib only，所有判断都来自 `.inkos-src/utils/hook-{promotion,health,stale-detection,ledger-validator,governance}.ts` 的逻辑端口。
+
+---
+
+## 1. 生命周期
+
+```
+seed ──(promote-pass)──▶ promoted ──(write 命中 advance)──▶ active
+                                                              │
+                                                              ├──(half-life 过期)──▶ stale
+                                                              ├──(settler resolve)──▶ resolved
+                                                              └──(settler defer )──▶ deferred / expired
+```
+
+| 阶段 | 存放位置 | 谁产生 | 谁消费 |
+|---|---|---|---|
+| seed | `story/runtime/hook-seeds.json` | architect / observer 候选 | promote-pass |
+| promoted | `story/state/hooks.json`（`promoted=true`） | promote-pass | composer 装上下文 |
+| active | `story/state/hooks.json`（`status=open/progressing`） | settler `hookOps.upsert` | writer / auditor / reviser |
+| stale | `hooks.json`（`stale=true`） | stale-scan | auditor (Hook Debt 警告) |
+| resolved / deferred | `hooks.json`（`status=resolved/deferred`） | settler `hookOps.resolve/defer` | composer 跳过 |
+
+> **唯一升级路径**：seed → promoted 由 promote-pass 写盘；其它真理文件改动一律走 `apply_delta.py`。
+
+---
+
+## 2. 四条 promotion 触发条件（任一命中即升级）
+
+源：`.inkos-src/utils/hook-promotion.ts#shouldPromoteHook`
+
+| 条件 | 何时触发 | 例子 |
+|---|---|---|
+| `core_hook` | hook 上 `coreHook === true` | architect 标的全书主线伏笔（每书 3-7 条） |
+| `depends_on` 非空 | `dependsOn: ["H003"]` 之类 | "师叔玉牌"依赖"师债真相"——必须进 ledger 才能跟踪上游 |
+| `advanced_count >= 2` | 在 ≥2 个章节里出现过推进 | 已经被读者跟踪两章的伏笔，必须留 |
+| `cross_volume` | 跨卷生效，三种子情况之一 | 见下 |
+
+**cross_volume 三种子情况**（`isCrossVolume` 算法）：
+
+1. **Case A**：`dependsOn` 里某个上游 hook 的 `startChapter` 落在更晚的卷（说明这条伏笔会等更后面的卷才能解锁）
+2. **Case B**：`paysOffInArc` 文案里出现 "第 N 卷 / volume N" 且 N ≠ seed 当前卷
+3. **Case C**：`payoffTiming ∈ {endgame, slow-burn}` 且 seed 落在非最终卷
+
+> Case B 的卷号识别支持中文数字（一/二/.../十）和阿拉伯数字。多过这两种格式 → 解析失败，跳过 Case B。
+
+**OR 语义**：任何一条命中即 `promote=true`；多个命中时 `reasons` 同时记录，便于审计。
+
+---
+
+## 3. Stale 规则（per-type half-life）
+
+源：`hook-promotion.ts#defaultHalfLifeChapters` + `hook-stale-detection.ts#computeHookDiagnostics`
+
+```
+distance = currentChapter - startChapter
+stale    = (not resolved) AND startChapter > 0 AND distance > halfLife
+```
+
+`halfLife` 优先用 hook 自带 `halfLifeChapters`；缺省时按 `payoffTiming` 推：
+
+| `payoffTiming` | 半衰期（章节数） |
+|---|---|
+| `immediate` / `near-term` | 10 |
+| `mid-arc`（也是默认） | 30 |
+| `slow-burn` / `endgame` | 80 |
+| 未给 | 30（fallback to mid-arc） |
+
+> stale 不会自动降级或删除——只是给 hook 加 `stale=true` 标志，让 auditor 在"Hook Debt"维度抛 warning。**作者决定何时回收。**
+
+**额外**：`blocked` 标志——`dependsOn` 引用的上游 hook **未植入或未回收**时为真。如果上游本身不在 hooks.json 里，认为 blocked 自该 hook 自己被植入起就成立。
+
+---
+
+## 4. 跨文件一致性规则（validate 命令）
+
+`hook_governance.py --command validate` 做四类检查：
+
+| 类别 | 严重度 | 触发条件 |
+|---|---|---|
+| `dep_cycle` | **critical** | `dependsOn` 形成环（DFS 检测，节点 frozenset 去重） |
+| `dangling_dep` | warning | hook A 的 dependsOn 包含一个 hooks.json 里查不到的 id |
+| `stale_ledger_row` | warning | `pending_hooks.md` 里出现一个 id，但 hooks.json 没有对应记录 |
+| `summary_unknown_token` | info | `chapter_summaries.json` 里 hookActivity 字段提到了一个不在 hooks.json 的 id-like token |
+| `unjustified_promotion` | warning | hook `promoted=true` 但当前没有任何 promotion 条件成立 |
+
+**只有 `critical` 是 apply_delta.py 的硬闸**——其它都只是 issue 列表里的提示。
+
+---
+
+## 5. Health metrics（health-report 命令）
+
+每条 hook 输出：
+
+| 字段 | 含义 |
+|---|---|
+| `freshness` | 0.0 ~ 1.0；线性衰减：`1 - chaptersSinceAdvance/halfLife`，clamp 到 [0,1] |
+| `distance` | `currentChapter - startChapter` |
+| `halfLife` | 实际生效的半衰期 |
+| `stale` / `blocked` | 见 §3 |
+| `promoted` / `coreHook` | 透传 |
+
+聚合层（顶层字段）：
+
+| 字段 | 含义 |
+|---|---|
+| `activeCount` | 排除 resolved/deferred 后的 hook 数 |
+| `staleCount` | 当前 stale 的 active hook 数 |
+| `blockedCount` | 当前 blocked 的 active hook 数 |
+| `chaptersSinceAnyAdvance` | 距上一次任何 hook 推进过去多少章；与 `noAdvanceWindow=5` 对比 |
+| `ledgerPressure` | `ok` / `warn` / `high`；active > maxActiveHooks(12) → high；total > 30 → high |
+
+---
+
+## 6. 何时调哪个命令
+
+| 时机 | 命令 | 原因 |
+|---|---|---|
+| 每次 Settler 完成、`apply_delta.py` 落盘后（自动） | `validate` + `stale-scan` | apply_delta 已硬编码这一步，**不需要手动调** |
+| Architect 写完 seeds 后 / 作者手动催"看看哪些伏笔该正式入册" | `promote-pass` | 把 seed 升级到正式 hook |
+| 每周 / 每卷尾 / 用户问"伏笔池现在乱不乱" | `health-report` | 给作者一个全局体检 |
+| 每章 audit 之前的可选信息源 | `health-report` | 把 staleCount / ledgerPressure 当作 auditor 的输入信号 |
+
+调用形式统一：
+
+```bash
+python {SKILL_ROOT}/scripts/hook_governance.py \
+  --book <bookDir> \
+  --command <promote-pass|stale-scan|validate|health-report> \
+  [--current-chapter N]
+```
+
+`--current-chapter` 缺省时从 `story/state/manifest.json#lastAppliedChapter` 读。
+
+---
+
+## 7. Claude 决策树：拿到 issue 列表怎么办？
+
+```
+issue.severity == "critical"
+   → 这是 apply_delta 的硬闸；exit 1。
+   → 不要"绕开"——回到 Settler，把违规的 delta 改干净，重跑 apply_delta。
+   → dep_cycle 是最常见的 critical：让 settler 砍掉一条 dependsOn 边。
+
+issue.severity == "warning"
+   → 写进章节 runtime log；继续后续阶段。
+   → 累积 ≥3 个 warning 时应在 audit 阶段加一条"hook ledger 卫生"提醒。
+   → dangling_dep / stale_ledger_row 通常说明 hook 在某次 settler 输出里被遗漏，
+     下一章的 planner 应顺手补一笔（mention 或 resolve）。
+
+issue.severity == "info"
+   → 静默；除非作者主动问伏笔状态，不需要 surface 给用户。
+```
+
+---
+
+## 8. 与 `apply_delta.py` 的耦合
+
+apply_delta 在写完所有真理文件后**自动**调：
+
+1. `hook_governance --command validate`
+2. `hook_governance --command stale-scan`
+
+二者输出合并到 apply_delta 的 stdout JSON 里（`hookGovernance.{validate,staleScan}`）。
+若 validate 报告 `counts.critical > 0`，apply_delta 退出码 1 并设 `hookGovernanceBlocked: true`——**主循环 step 11 必须看这两个字段**，不能拿 step 10 的真理文件直接落章节正文。
+
+紧急情况下（如手工修复中）可加 `--skip-hook-governance` 开关，但日常流水线**绝不**该加。
+
+---
+
+## 9. 与 Phase 7 / Phase 9 的关系
+
+- **Phase 7 (Settler)** 产 `hookOps.upsert`；只能引用现存 hookId，新候选写在 `newHookCandidates`。promote-pass 之后 seed 才会变成可被 upsert 的 hook。
+- **Phase 9 (Auditor)** 在 "Hook Debt" 维度直接读 `hooks.json` 里的 `stale` / `blocked` 标志——这两个标志由 stale-scan 写。所以 audit 之前 stale-scan 必须跑过（apply_delta 已保证）。
+
+---
+
+## 10. 不要做的事
+
+- **不要**手工编辑 `hooks.json` 加 `promoted=true`——promote-pass 会因找不到任何条件证据而把它当成 unjustified_promotion warning。
+- **不要**用 LLM 决定 `coreHook` / `dependsOn`——这些是 architect 阶段的产物，settler 阶段只能透传，不能新增。
+- **不要**把 hook-seeds.json 当成 ledger 用——seed 文件是"候选池"，写入 pending_hooks.md 的只能是 promoted hook。
