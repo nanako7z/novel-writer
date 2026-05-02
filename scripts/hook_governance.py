@@ -52,6 +52,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _summary import emit_summary  # noqa: E402
+
 # ----------------------------- defaults ------------------------------------
 
 HOOK_HEALTH_DEFAULTS = {
@@ -84,6 +87,7 @@ RESOLVED_STATUSES = {"resolved", "closed", "done", "已回收", "已解决"}
 def hard_err(msg: str, code: int = 2) -> "None":
     print(json.dumps({"ok": False, "error": msg}, ensure_ascii=False),
           file=sys.stderr)
+    emit_summary(f"FAILED: {msg}", prefix="error")
     sys.exit(code)
 
 
@@ -1251,6 +1255,60 @@ def main() -> int:
         return 2  # unreachable
 
     print(json.dumps(out, ensure_ascii=False, indent=2))
+    ok = bool(out.get("ok", True))
+    parts = [f"command={cmd}", f"ok={ok}"]
+    # per-command brief stats
+    if cmd == "validate":
+        counts = out.get("counts") or {}
+        parts.append(
+            f"critical={counts.get('critical', 0)} warning={counts.get('warning', 0)} "
+            f"info={counts.get('info', 0)} totalHooks={out.get('totalHooks', 0)}"
+        )
+    elif cmd == "stale-scan":
+        parts.append(
+            f"newlyStale={len(out.get('newlyStale', []))} "
+            f"newlyBlocked={len(out.get('newlyBlocked', []))} "
+            f"totalStale={out.get('totalStale', 0)} totalBlocked={out.get('totalBlocked', 0)}"
+        )
+    elif cmd == "promote-pass":
+        parts.append(
+            f"flipped={len(out.get('flipped', []))} "
+            f"promotedFromSeeds={len(out.get('promotedFromSeeds', []))} "
+            f"totalHooks={out.get('totalHooks', 0)}"
+        )
+    elif cmd == "health-report":
+        parts.append(
+            f"active={out.get('activeCount', 0)} stale={out.get('staleCount', 0)} "
+            f"blocked={out.get('blockedCount', 0)} ledgerPressure={out.get('ledgerPressure')}"
+        )
+    elif cmd == "commit-payoff":
+        parts.append(
+            f"hookId={out.get('hookId')} chapter={out.get('committedPayoffChapter')} "
+            f"idempotent={out.get('idempotent')}"
+        )
+    elif cmd == "uncommit-payoff":
+        parts.append(f"hookId={out.get('hookId')} cleared={out.get('cleared')}")
+    elif cmd == "due-this-chapter":
+        parts.append(
+            f"ch={out.get('currentChapter')} due={out.get('dueCount', 0)} "
+            f"overdue={out.get('overdueCount', 0)}"
+        )
+    elif cmd == "verify-volume-payoff":
+        s = out.get("summary") or {}
+        parts.append(
+            f"volume={out.get('volume')} paid_off={s.get('paid_off', 0)} "
+            f"forgotten={s.get('forgotten', 0)} unpaid_open={s.get('unpaid_open', 0)} "
+            f"future_committed={s.get('future_committed', 0)}"
+        )
+    elif cmd == "volume-payoff":
+        parts.append(
+            f"volume={out.get('volumeNumber')} "
+            f"opened={out.get('hooksOpenedInVolume', 0)} "
+            f"resolved={out.get('hooksResolvedByEnd', 0)} "
+            f"payoffRate={out.get('payoffRate', 0.0)} "
+            f"issues={len(out.get('issues', []))}"
+        )
+    emit_summary(" ".join(parts), prefix="summary" if ok else "error")
     return 0
 
 

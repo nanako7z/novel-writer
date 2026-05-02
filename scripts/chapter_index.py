@@ -54,6 +54,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _summary import emit_summary  # noqa: E402
+
 WRITE_COMMANDS = {"add", "update", "set-status"}
 
 CHAPTER_STATUS = {
@@ -556,7 +559,8 @@ def main() -> None:
         if lock_acquired:
             _release_lock(Path(args.book).resolve())
 
-    if args.json or args.command in ("add", "update", "set-status", "get"):
+    json_stdout = args.json or args.command in ("add", "update", "set-status", "get")
+    if json_stdout:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "list":
         print(_format_list_text(result))
@@ -564,6 +568,40 @@ def main() -> None:
         print(_format_validate_text(result))
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    # Human summary on stderr — only for commands whose stdout is JSON
+    # (add/update/set-status/get always; list/validate only when --json).
+    if json_stdout:
+        ok = bool(result.get("ok"))
+        chapter = getattr(args, "chapter", None)
+        if ok:
+            entry = result.get("entry") or {}
+            if args.command in ("add", "update", "set-status"):
+                emit_summary(
+                    f"action={result.get('action', args.command)} "
+                    f"ch={chapter} status={entry.get('status', '?')}"
+                )
+            elif args.command == "get":
+                emit_summary(
+                    f"action=get ch={chapter} status={entry.get('status', '?')} "
+                    f"words={entry.get('wordCount', 0)}"
+                )
+            elif args.command == "list":
+                summary = result.get("summary", {}) or {}
+                by = summary.get("byStatus", {}) or {}
+                status_part = ", ".join(f"{k}={v}" for k, v in sorted(by.items())) or "none"
+                emit_summary(
+                    f"listed {summary.get('totalEntries', 0)} entries (status: {status_part})"
+                )
+            elif args.command == "validate":
+                counts = result.get("counts") or {}
+                emit_summary(
+                    f"validated entries={result.get('totalEntries', 0)} "
+                    f"critical={counts.get('critical', 0)} warning={counts.get('warning', 0)}"
+                )
+        else:
+            error = result.get("error") or (result.get("errors") and result["errors"][0]) or "unknown"
+            emit_summary(f"FAILED: {error}", prefix="error")
 
     if not result.get("ok"):
         # exit 2 for validation/business errors so CI / orchestration can detect

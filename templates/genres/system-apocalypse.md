@@ -10,6 +10,23 @@ eraResearch: false
 pacingRule: "Early (ch 1-15): survival pressure every chapter. Mid (ch 15-50): power-up + faction politics every 3-5 chapters. Late: expansion and existential threats."
 satisfactionTypes: ["Survival Against Odds", "Level Up", "Territory Claimed", "Faction Victory", "System Secret Revealed", "Societal Rebuild Milestone"]
 auditDimensions: [1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 3
+  satisfactionSequence:
+    - {type: "Survival Against Odds",       weight: 3}
+    - {type: "Level Up",                    weight: 3}
+    - {type: "Territory Claimed",           weight: 2}
+    - {type: "Faction Victory",             weight: 2}
+    - {type: "System Secret Revealed",      weight: 2}
+    - {type: "Societal Rebuild Milestone",  weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Survival", "Setup"],              satisfactionPerN: 4}
+    middle: {chapterTypes: ["Survival", "Combat"],             satisfactionPerN: 3}
+    late:   {chapterTypes: ["Combat", "Payoff"],               satisfactionPerN: 2}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",     action: "force-switch-type"}
+    - {pattern: "3 consecutive chapters without satisfaction", action: "satisfactionEmergency"}
+    - {pattern: "4 consecutive high-tension moods",            action: "lower-tension"}
 ---
 
 ## Genre Prohibitions

@@ -43,6 +43,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _summary import emit_summary  # noqa: E402
+
 # ----------------------------- patterns ------------------------------------
 
 LEDGER_HEADING_PATTERNS = [
@@ -95,6 +98,7 @@ ARROW_SPLIT_RE = re.compile(r"[→]|->")
 def hard_err(msg: str, code: int = 3) -> "None":
     print(json.dumps({"ok": False, "error": msg}, ensure_ascii=False),
           file=sys.stderr)
+    emit_summary(f"FAILED: {msg}", prefix="error")
     sys.exit(code)
 
 
@@ -447,6 +451,17 @@ def main() -> int:
             )
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    violations = result.get("violations") or []
+    n_total = len(violations) if isinstance(violations, list) else 0
+    ledger = result.get("ledger") or {}
+    adv_n = len(ledger.get("advance", []) or []) if isinstance(ledger, dict) else 0
+    res_n = len(ledger.get("resolve", []) or []) if isinstance(ledger, dict) else 0
+    prefix = "summary" if result.get("ok") else "error"
+    emit_summary(
+        f"violations={n_total} (advance={adv_n} resolve={res_n}) "
+        f"chapter={args.chapter if args.chapter is not None else '?'}",
+        prefix=prefix,
+    )
     return 2 if not result["ok"] else 0
 
 

@@ -10,6 +10,22 @@ eraResearch: false
 pacingRule: "Slow, meditative pacing. Each chapter advances an emotional arc or community bond. Seasonal/cyclical structure works well."
 satisfactionTypes: ["Relationship Deepened", "Community Problem Solved", "Emotional Breakthrough", "Craft Mastered", "Found Family Moment", "Small Wonder Discovered"]
 auditDimensions: [1,2,3,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 8
+  satisfactionSequence:
+    - {type: "Relationship Deepened",       weight: 3}
+    - {type: "Found Family Moment",         weight: 3}
+    - {type: "Community Problem Solved",    weight: 2}
+    - {type: "Emotional Breakthrough",      weight: 2}
+    - {type: "Small Wonder Discovered",     weight: 2}
+    - {type: "Craft Mastered",              weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Slice-of-Life", "Setup"],         satisfactionPerN: 12}
+    middle: {chapterTypes: ["Community", "Slice-of-Life"],     satisfactionPerN: 8}
+    late:   {chapterTypes: ["Community", "Payoff"],            satisfactionPerN: 5}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",     action: "force-switch-type"}
+    - {pattern: "8 consecutive chapters without satisfaction", action: "satisfactionEmergency"}
 ---
 
 ## Genre Prohibitions

@@ -77,6 +77,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Single source of truth for the on-disk schema version.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _schema import SCHEMA_VERSION  # noqa: E402
+from _summary import emit_summary  # noqa: E402
+
 # Stagnation detection: if the same critical-issue description appears
 # in 2+ consecutive rounds, planner should escalate the reviser mode.
 STAGNATION_MIN_CONSECUTIVE = 2
@@ -285,6 +290,11 @@ def cmd_write(args: argparse.Namespace) -> dict:
     # Stamp timestamp if missing.
     if "timestamp" not in data or not data["timestamp"]:
         data["timestamp"] = _now()
+
+    # Stamp schema version (forward-compat marker — see scripts/_schema.py).
+    # If the caller already provided one, keep theirs; mismatch is the caller's
+    # responsibility to handle (this script is an emitter, not a migrator).
+    data.setdefault("schemaVersion", SCHEMA_VERSION)
 
     # Compute delta vs previous round, if any.
     prev = (
@@ -587,6 +597,25 @@ def main() -> None:
         ap.error("no mode specified")
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    action = (
+        "write" if args.write is not None else
+        "list" if args.list else
+        "read" if args.read else
+        "analyze" if args.analyze else
+        "clear" if args.clear else "?"
+    )
+    ok = bool(result.get("ok"))
+    if ok:
+        emit_summary(
+            f"action={action} ch={args.chapter} "
+            f"round={args.round if args.round is not None else '-'}"
+        )
+    else:
+        emit_summary(
+            f"FAILED: action={action} ch={args.chapter} "
+            f"error={result.get('error', 'unknown')}",
+            prefix="error",
+        )
     if not result.get("ok"):
         sys.exit(2)
 

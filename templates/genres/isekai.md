@@ -10,6 +10,22 @@ eraResearch: false
 pacingRule: "Establish new world rules by chapter 3. Cultural adaptation and fish-out-of-water moments every 2-3 chapters early. Skip tutorial-town syndrome — no 50 pages hitting rats."
 satisfactionTypes: ["World Rule Discovered", "Cultural Clash Resolved", "Real-World Skill Applied", "New Ability Gained", "Relationship Formed", "Identity Established in New World"]
 auditDimensions: [1,2,3,4,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 4
+  satisfactionSequence:
+    - {type: "World Rule Discovered",            weight: 3}
+    - {type: "Real-World Skill Applied",         weight: 3}
+    - {type: "Cultural Clash Resolved",          weight: 2}
+    - {type: "New Ability Gained",               weight: 2}
+    - {type: "Relationship Formed",              weight: 2}
+    - {type: "Identity Established in New World", weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Setup", "Adaptation"],            satisfactionPerN: 6}
+    middle: {chapterTypes: ["Exploration", "Adaptation"],      satisfactionPerN: 4}
+    late:   {chapterTypes: ["Combat", "Payoff"],               satisfactionPerN: 2}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",     action: "force-switch-type"}
+    - {pattern: "4 consecutive chapters without satisfaction", action: "satisfactionEmergency"}
 ---
 
 ## Genre Prohibitions

@@ -17,6 +17,9 @@ from pathlib import Path
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = SKILL_ROOT / "templates"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _summary import emit_summary  # noqa: E402
+
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
 
@@ -158,12 +161,14 @@ def main() -> int:
     args = parse_args()
     if not kebab_ok(args.id):
         print(json.dumps({"error": "bookId must be kebab-case"}), file=sys.stderr)
+        emit_summary(f"FAILED: bookId must be kebab-case (got {args.id!r})", prefix="error")
         return 1
     workdir = Path(args.workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     book_dir = workdir / "books" / args.id
     if book_dir.exists() and any(book_dir.iterdir()):
         print(json.dumps({"error": f"book dir not empty: {book_dir}"}), file=sys.stderr)
+        emit_summary(f"FAILED: book dir not empty: {book_dir}", prefix="error")
         return 1
     book_dir.mkdir(parents=True, exist_ok=True)
     make_dirs(book_dir)
@@ -199,6 +204,7 @@ def main() -> int:
             book_json_p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except json.JSONDecodeError as e:
             print(json.dumps({"error": f"book.json invalid: {e}"}), file=sys.stderr)
+            emit_summary(f"FAILED: book.json invalid: {e}", prefix="error")
             return 1
 
     # Optional: seed author_intent.md from a creative brief
@@ -301,6 +307,14 @@ def main() -> int:
         "nextStep": next_step,
         "inkosParity": inkos_parity,
     }, ensure_ascii=False, indent=2))
+    parity_ok = all(
+        isinstance(v, str) and not v.startswith("skipped")
+        for v in inkos_parity.values()
+    )
+    emit_summary(
+        f"book {args.id} created at {book_dir} | files={len(files_created)} "
+        f"| nextStep={next_step} | inkosParity={'ok' if parity_ok else 'partial'}"
+    )
     return 0
 
 

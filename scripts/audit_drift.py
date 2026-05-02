@@ -57,6 +57,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _summary import emit_summary  # noqa: E402
+
 DRIFT_HEADERS_TO_STRIP = (
     "## 审计纠偏（自动生成，下一章写作前参照）",
     "## Audit Drift Correction",
@@ -419,6 +422,25 @@ def main() -> None:
     result = handlers[args.command](args)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    ok = bool(result.get("ok"))
+    chapter = getattr(args, "chapter", None)
+    issues_n = (
+        len(result.get("issues", []) or [])
+        if isinstance(result.get("issues"), list) else 0
+    )
+    if ok:
+        emit_summary(
+            f"action={args.command} chapter={chapter if chapter is not None else '-'} "
+            f"issues={issues_n}"
+        )
+    else:
+        err_msg = result.get("error") or (
+            (result.get("errors") or ["unknown"])[0] if result.get("errors") else "unknown"
+        )
+        emit_summary(
+            f"FAILED: action={args.command} error={err_msg}", prefix="error"
+        )
 
     if not result.get("ok"):
         sys.exit(2)

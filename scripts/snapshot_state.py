@@ -71,6 +71,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _summary import emit_summary  # noqa: E402
+
 # ── constants (mirror inkos manager.ts) ──────────────────────────────
 
 TRUTH_MD_FILES = [
@@ -291,6 +294,11 @@ def cmd_create(book_dir: Path, chapter_no: int, note: str | None,
         f"  note: {note or '(none)'}",
         f"  milestone: {bool(milestone)}",
     ])
+    if as_json:
+        emit_summary(
+            f"action=create snapshot ch={chapter_no} files={file_count} "
+            f"bytes={total_bytes} milestone={bool(milestone)}"
+        )
     return 0
 
 
@@ -314,6 +322,8 @@ def cmd_list(book_dir: Path, as_json: bool) -> int:
     payload = {"book": str(book_dir), "snapshots": rows, "count": len(rows)}
     if as_json:
         _emit(payload, True)
+        ms_n = sum(1 for r in rows if r.get("milestone"))
+        emit_summary(f"action=list snapshots={len(rows)} milestones={ms_n}")
     else:
         if not rows:
             print(f"No snapshots under {_snapshots_dir(book_dir)}")
@@ -333,10 +343,16 @@ def cmd_show(book_dir: Path, chapter_no: int, as_json: bool) -> int:
     snap = _snapshot_dir(book_dir, chapter_no)
     if not snap.is_dir():
         _emit({"error": f"snapshot not found: chapter {chapter_no}"}, as_json)
+        emit_summary(
+            f"FAILED: snapshot not found: chapter {chapter_no}", prefix="error"
+        )
         return 1
     meta = _read_json(snap / "_meta.json", None)
     if meta is None:
         _emit({"error": f"_meta.json missing or invalid in {snap}"}, as_json)
+        emit_summary(
+            f"FAILED: _meta.json missing or invalid in {snap}", prefix="error"
+        )
         return 1
     file_count, total_bytes = _dir_byte_count(snap)
     payload = {**meta, "path": str(snap),
@@ -348,6 +364,10 @@ def cmd_show(book_dir: Path, chapter_no: int, as_json: bool) -> int:
 
     if as_json:
         _emit(payload, True)
+        emit_summary(
+            f"action=show ch={chapter_no} files={file_count} bytes={total_bytes} "
+            f"integrity={'ok' if not integrity_issues else 'FAILED'}"
+        )
     else:
         print(f"Snapshot for chapter {chapter_no}: {snap}")
         print(f"  createdAt: {meta.get('createdAt')}")
@@ -387,15 +407,22 @@ def cmd_restore(book_dir: Path, chapter_no: int, target_dir: Path | None,
     snap = _snapshot_dir(book_dir, chapter_no)
     if not snap.is_dir():
         _emit({"error": f"snapshot not found: chapter {chapter_no}"}, as_json)
+        emit_summary(
+            f"FAILED: snapshot not found: chapter {chapter_no}", prefix="error"
+        )
         return 1
     meta = _read_json(snap / "_meta.json", None)
     if meta is None:
         _emit({"error": f"_meta.json missing in {snap}"}, as_json)
+        emit_summary(
+            f"FAILED: _meta.json missing in {snap}", prefix="error"
+        )
         return 1
 
     target = (target_dir or book_dir).resolve()
     if not target.is_dir():
         _emit({"error": f"target not a dir: {target}"}, as_json)
+        emit_summary(f"FAILED: target not a dir: {target}", prefix="error")
         return 1
 
     # safety: refuse if current manifest has progressed past N
@@ -542,6 +569,11 @@ def cmd_restore(book_dir: Path, chapter_no: int, target_dir: Path | None,
         f"Restored snapshot of chapter {chapter_no} into {target}",
         f"  applied {len(applied)} file action(s)",
     ])
+    if as_json:
+        emit_summary(
+            f"action=restore ch={chapter_no} actions={len(applied)} "
+            f"force={force} wouldLose={would_lose}"
+        )
     return 0
 
 
@@ -605,6 +637,10 @@ def cmd_diff(book_dir: Path, from_n: int, to_n: int,
     }
     if as_json:
         _emit(payload, True)
+        emit_summary(
+            f"action=diff from={from_n} to={to_n} files={len(rows)} "
+            f"changed={payload['changedCount']}"
+        )
     else:
         print(f"Diff snapshot {from_n} -> {to_n}")
         for r in rows:
@@ -663,6 +699,11 @@ def cmd_prune(book_dir: Path, keep_last: int, dry_run: bool, as_json: bool) -> i
     }
     if as_json:
         _emit(payload, True)
+        emit_summary(
+            f"action=prune dryRun={dry_run} before={len(dirs)} "
+            f"deleted={len(deleted)} milestonesKept={len(keep)} "
+            f"recentKept={len(kept_recent)}"
+        )
     else:
         verb = "would delete" if dry_run else "deleted"
         print(f"Prune (keep-last={keep_last}, milestones always kept)")
@@ -728,6 +769,7 @@ def main() -> int:
     if not book_dir.is_dir():
         print(json.dumps({"error": f"book dir not found: {book_dir}"},
                          ensure_ascii=False), file=sys.stderr)
+        emit_summary(f"FAILED: book dir not found: {book_dir}", prefix="error")
         return 1
 
     if args.cmd == "create":

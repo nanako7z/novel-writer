@@ -10,6 +10,22 @@ eraResearch: false
 pacingRule: "Romance beats at every act break. Chemistry scenes every 2-3 chapters. Fantasy romance: consummation at 60-75%. Romantic fantasy: romance resolution aligned with plot resolution."
 satisfactionTypes: ["Chemistry Moment", "Vulnerability Shared", "Obstacle Overcome Together", "First Kiss", "Relationship Defined", "HEA/HFN Achieved"]
 auditDimensions: [1,2,3,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 4
+  satisfactionSequence:
+    - {type: "Chemistry Moment",              weight: 3}
+    - {type: "Vulnerability Shared",          weight: 3}
+    - {type: "Obstacle Overcome Together",    weight: 2}
+    - {type: "First Kiss",                    weight: 2}
+    - {type: "Relationship Defined",          weight: 1}
+    - {type: "HEA/HFN Achieved",              weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Setup", "Romance"],               satisfactionPerN: 5}
+    middle: {chapterTypes: ["Romance", "Action"],              satisfactionPerN: 3}
+    late:   {chapterTypes: ["Romance", "Payoff"],              satisfactionPerN: 2}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",     action: "force-switch-type"}
+    - {pattern: "4 consecutive chapters without satisfaction", action: "satisfactionEmergency"}
 ---
 
 ## Genre Prohibitions

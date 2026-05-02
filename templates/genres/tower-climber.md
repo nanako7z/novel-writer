@@ -10,6 +10,22 @@ eraResearch: false
 pacingRule: "Each floor arc spans 3-8 chapters: introduction, exploration, confrontation, advancement. Difficulty must escalate visibly between floors."
 satisfactionTypes: ["Floor Cleared", "Boss Defeated", "New Ability Gained", "Floor Secret Discovered", "Rival Surpassed", "Summit Progress"]
 auditDimensions: [1,2,3,4,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 4
+  satisfactionSequence:
+    - {type: "Floor Cleared",            weight: 3}
+    - {type: "Boss Defeated",            weight: 3}
+    - {type: "New Ability Gained",       weight: 2}
+    - {type: "Floor Secret Discovered",  weight: 2}
+    - {type: "Summit Progress",          weight: 2}
+    - {type: "Rival Surpassed",          weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Setup", "Floor Challenge"],         satisfactionPerN: 5}
+    middle: {chapterTypes: ["Floor Challenge", "Progression"],   satisfactionPerN: 4}
+    late:   {chapterTypes: ["Floor Challenge", "Payoff"],        satisfactionPerN: 2}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",       action: "force-switch-type"}
+    - {pattern: "4 consecutive chapters without satisfaction",   action: "satisfactionEmergency"}
 ---
 
 ## Genre Prohibitions

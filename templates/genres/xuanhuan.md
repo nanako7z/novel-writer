@@ -9,6 +9,23 @@ eraResearch: false
 pacingRule: "三章内必有明确反馈：打脸、收益兑现、信息反转、地位变化"
 satisfactionTypes: ["打脸", "升级突破", "收益兑现", "智斗碾压", "身份揭示", "底牌亮出"]
 auditDimensions: [1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 4
+  satisfactionSequence:
+    - {type: "打脸",     weight: 3}
+    - {type: "升级突破", weight: 3}
+    - {type: "智斗碾压", weight: 2}
+    - {type: "收益兑现", weight: 2}
+    - {type: "底牌亮出", weight: 2}
+    - {type: "身份揭示", weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["布局章", "战斗章"],   satisfactionPerN: 6}
+    middle: {chapterTypes: ["战斗章", "布局章"],   satisfactionPerN: 3}
+    late:   {chapterTypes: ["战斗章", "回收章"],   satisfactionPerN: 2}
+  fatigueGuards:
+    - {pattern: "连续 3 章同 chapterType",        action: "force-switch-type"}
+    - {pattern: "连续 4 章无爽点",                 action: "satisfactionEmergency"}
+    - {pattern: "连续 4 章高紧张 mood",            action: "lower-tension"}
 ---
 
 ## 题材禁忌

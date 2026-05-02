@@ -9,6 +9,20 @@ eraResearch: false
 pacingRule: "每2-3章有一个明确的进展或反馈"
 satisfactionTypes: ["目标达成", "困难克服", "真相揭示", "关系转变"]
 auditDimensions: [1,2,3,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 5
+  satisfactionSequence:
+    - {type: "目标达成", weight: 2}
+    - {type: "困难克服", weight: 2}
+    - {type: "真相揭示", weight: 2}
+    - {type: "关系转变", weight: 2}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["布局章", "推进章"],   satisfactionPerN: 8}
+    middle: {chapterTypes: ["推进章", "过渡章"],   satisfactionPerN: 5}
+    late:   {chapterTypes: ["推进章", "回收章"],   satisfactionPerN: 3}
+  fatigueGuards:
+    - {pattern: "连续 3 章同 chapterType",        action: "force-switch-type"}
+    - {pattern: "连续 5 章无爽点",                 action: "satisfactionEmergency"}
 ---
 
 ## 题材禁忌

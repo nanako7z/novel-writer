@@ -10,6 +10,23 @@ eraResearch: false
 pacingRule: "Training/meditation alternates with application/combat. Breakthrough every 5-10 chapters early, every 15-25 late. Each stage must feel earned through discipline."
 satisfactionTypes: ["Stage Breakthrough", "Technique Mastery", "Tribulation Survived", "Martial Victory", "Philosophical Insight", "Core Formation"]
 auditDimensions: [1,2,3,4,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 5
+  satisfactionSequence:
+    - {type: "Stage Breakthrough",     weight: 3}
+    - {type: "Technique Mastery",      weight: 3}
+    - {type: "Martial Victory",        weight: 2}
+    - {type: "Tribulation Survived",   weight: 2}
+    - {type: "Philosophical Insight",  weight: 1}
+    - {type: "Core Formation",         weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Setup", "Training"],              satisfactionPerN: 8}
+    middle: {chapterTypes: ["Training", "Combat"],             satisfactionPerN: 5}
+    late:   {chapterTypes: ["Combat", "Breakthrough"],         satisfactionPerN: 3}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",     action: "force-switch-type"}
+    - {pattern: "5 consecutive chapters without satisfaction", action: "satisfactionEmergency"}
+    - {pattern: "4 consecutive high-tension moods",            action: "lower-tension"}
 ---
 
 ## Genre Prohibitions

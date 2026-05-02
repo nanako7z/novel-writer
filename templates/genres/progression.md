@@ -10,6 +10,22 @@ eraResearch: false
 pacingRule: "Tier advancement every 2-4 chapters early, every 8-15 mid-story, every 20+ late-story. Each tier must feel fundamentally different."
 satisfactionTypes: ["Tier Breakthrough", "Technique Mastery", "Rival Surpassed", "Mentor Transcended", "Power Combination Discovered", "Impossible Challenge Overcome"]
 auditDimensions: [1,2,3,4,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 5
+  satisfactionSequence:
+    - {type: "Tier Breakthrough",            weight: 3}
+    - {type: "Technique Mastery",            weight: 2}
+    - {type: "Rival Surpassed",              weight: 2}
+    - {type: "Impossible Challenge Overcome", weight: 2}
+    - {type: "Power Combination Discovered", weight: 2}
+    - {type: "Mentor Transcended",           weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Setup", "Training"],              satisfactionPerN: 6}
+    middle: {chapterTypes: ["Training", "Breakthrough"],       satisfactionPerN: 4}
+    late:   {chapterTypes: ["Breakthrough", "Payoff"],         satisfactionPerN: 3}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",     action: "force-switch-type"}
+    - {pattern: "5 consecutive chapters without satisfaction", action: "satisfactionEmergency"}
 ---
 
 ## Genre Prohibitions

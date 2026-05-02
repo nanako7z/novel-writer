@@ -28,6 +28,10 @@ from typing import Any
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 
+# Single source of truth for the on-disk schema version.
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+from _schema import SCHEMA_VERSION, STATE_FILES_WITH_VERSION  # noqa: E402
+
 # ---- expectation tables (kept in sync with templates/ + scripts/) ---------
 
 EXPECTED_TEMPLATES = [
@@ -279,6 +283,49 @@ def check_book(book_dir: Path) -> list[dict]:
             out.append(make("hooks.json", "fail", f"invalid: {e}"))
     else:
         out.append(make("hooks.json", "warning", "missing"))
+
+    # state schema version: every dict-shaped state file should carry the
+    # current `schemaVersion`. Missing is a warning (pre-versioned book —
+    # next apply_delta will auto-fill); mismatch is also a warning (migration
+    # owed); fail only if the file exists but is unreadable as JSON.
+    sv_missing: list[str] = []
+    sv_mismatch: list[tuple[str, str]] = []
+    sv_unreadable: list[str] = []
+    sv_present_ok = 0
+    for rel in STATE_FILES_WITH_VERSION:
+        sp = book_dir / rel
+        if not sp.is_file():
+            continue  # already covered by other checks
+        try:
+            sd = json.loads(sp.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            sv_unreadable.append(rel)
+            continue
+        if not isinstance(sd, dict):
+            sv_unreadable.append(rel)
+            continue
+        cur = sd.get("schemaVersion")
+        if cur is None:
+            sv_missing.append(rel)
+        elif cur != SCHEMA_VERSION:
+            sv_mismatch.append((rel, str(cur)))
+        else:
+            sv_present_ok += 1
+    if sv_unreadable:
+        out.append(make("state schema version", "fail",
+                        f"unreadable: {', '.join(sv_unreadable)}"))
+    elif sv_mismatch:
+        bits = [f"{rel}={cur!r}" for rel, cur in sv_mismatch]
+        out.append(make("state schema version", "warning",
+                        f"mismatch (current={SCHEMA_VERSION!r}): {', '.join(bits)}; "
+                        "see references/schemas/migration-log.md"))
+    elif sv_missing:
+        out.append(make("state schema version", "warning",
+                        f"missing in: {', '.join(sv_missing)} "
+                        f"(expected {SCHEMA_VERSION!r}; next apply_delta will auto-fill)"))
+    else:
+        out.append(make("state schema version", "ok",
+                        f"{sv_present_ok}/{len(STATE_FILES_WITH_VERSION)} at {SCHEMA_VERSION!r}"))
 
     # genre profile resolves
     if book is not None:

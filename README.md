@@ -45,6 +45,119 @@ Claude 会调 `init_book.py` 落地完整目录结构，给你填一下 `author_
 
 ---
 
+## 常用配方
+
+下面是几个高频场景，复制场景 1-2 行说出意图给 Claude 即可，不用记脚本名。
+
+### 配方 1：从零写一本网文（带 brief）
+
+适合心里已经有想法、不想反复打磨 author_intent 的场景。
+
+```
+我要写一本仙侠+穿越，主角现代医学博士穿到修真界，靠现代知识破病机；
+卷一目标：从凡人到金丹；卷二：宗门权斗。叫《青囊志》，目标 150 章。
+```
+
+Claude 会：
+1. 调 `init_book.py --brief <你给的那段> --title 青囊志 --genre xianxia`，把 brief 落到 `story/brief.md` + 灌进 `author_intent.md`
+2. 立即进 Architect（`nextStep="architect"`），生成 `story_frame.md` + `volume_map.md` + `roles/` + `book_rules.md` + `pending_hooks.md` + `chapter_summaries.json` 初始结构
+3. 拍 `snapshots/0000/` 立项原点
+4. 提示你"基础架构已生成，可以让我写第 1 章"
+
+第 1 章会自动按"黄金开场"特殊处理。
+
+### 配方 2：续写已有的书（半成品 / 上次没写完）
+
+```
+继续写《青囊志》第 12 章
+# 或：上次写到一半崩了，从哪续
+```
+
+Claude 会：
+1. 跑 `recover_chapter.py --book books/青囊志` 看 `runtime/` 残留物，识别上次卡在哪个 phase
+2. 按推荐续接点恢复主循环
+3. 写第 12 章
+
+### 配方 3：写《XX》同人
+
+```
+我想写《盗墓笔记》的同人，瓶邪向，AU 模式，主角不死
+```
+
+Claude 会：
+1. 调 `init_book.py --fanfic-mode au` 立项
+2. 进 [`branches/fanfic.md`](references/branches/fanfic.md) 走 canon importer，让你贴原作设定
+3. 抽 `fanfic_canon.md`（5 SECTION：核心设定 / 角色基线 / 关键事件 / 风格基调 / 禁碰红线）
+4. 之后按主循环写，Writer/Auditor 自动注入 fanfic 模式约束
+
+支持 4 模式：`canon`（贴原作）/ `au`（架空）/ `ooc`（性格魔改）/ `cp`（cp 向重塑）。
+
+### 配方 4：学某作者风格再写
+
+```
+我想学一下天蚕土豆的风格，这是他《斗破》的几章 [贴原文]，
+然后用这个风格写我的玄幻新书
+```
+
+Claude 会：
+1. 进 [`branches/style.md`](references/branches/style.md)
+2. 调 `style_analyze.py` 算 5 项纯文本统计（句长、段长、词汇丰富度、修辞密度、节奏特征）
+3. 跑 LLM 定性分析（开篇钩、对话密度、世界观铺陈方式等）
+4. 落 `story/style_profile.json` + `story/style_guide.md`
+5. 之后写正文时 Writer 会注入这两个文件作为风格基线
+
+### 配方 5：长篇连载的章节运营
+
+写到 60 章后，定期做：
+
+```
+看下伏笔健康度       → hook_governance.py health-report
+看下哪些章节待审      → chapter_index.py list --status ready-for-review
+压缩一下前面卷       → consolidate_check.py 看是否值得；点头则进 phase 12
+看下跨章疲劳         → fatigue_scan.py（advisory）
+查节奏压力          → cadence_check.py（推荐下章 chapterType + satisfactionType）
+```
+
+也可以让 Claude 自己判断要不要做这些（"看一下整体进度"会触发 status + analytics + hook health 综合报告）。
+
+### 配方 6：章节出问题了
+
+```
+第 7 章 audit 没过线
+# 或：第 7 章重写
+# 或：把第 7 章里"他怒视对方"那句改成 [新句]
+```
+
+Claude 会按场景路由：
+- audit fail → phase 10 reviser 6 模式之一（auto/polish/rewrite/rework/anti-detect/spot-fix）
+- spot 替换 → spot-fix 模式 + `spot_fix_patches.py`
+- 重写 → rework 模式
+
+### 配方 7：写脏了真理文件想回滚
+
+```
+回滚到第 5 章那一刻 / 真理文件写脏了
+```
+
+Claude 会：
+1. `snapshot_state.py list` 看可恢复的快照
+2. `snapshot_state.py diff --from <现在> --to 5` 给你看差异
+3. 你确认后 `snapshot_state.py restore --chapter 5`，原子覆盖
+4. 删除 5 之后的 chapters/{NNNN}.md 和 chapter_index 条目
+
+snapshot 在每章落盘后自动产，立项时也有 `snapshots/0000/` 原点。
+
+### 配方 8：导出
+
+```
+导出 epub
+# 或：txt 导出第 1-30 章
+```
+
+调 `export_book.py --format epub|md|txt [--from-chapter N] [--to-chapter M] [--include-summary]`。txt/md 几 KB 即出，epub 是合规 EPUB 3 包。
+
+---
+
 ## 架构
 
 主循环 14 个 phase，每个 phase 一个 markdown 文件描述「何时进入 / Inputs / Process / Output contract / Failure handling」，Claude 在跑到对应阶段时严格按 phase 文件操作。

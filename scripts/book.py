@@ -28,6 +28,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _summary import emit_summary  # noqa: E402
+
 CHAPTER_NAME_RE = re.compile(r"^(\d{4})\.md$")
 KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
@@ -249,6 +252,7 @@ def cmd_list(args: argparse.Namespace) -> int:
             "bookCount": len(rows),
             "books": rows,
         }, ensure_ascii=False, indent=2))
+        emit_summary(f"action=list workdir={workdir} books={len(rows)}")
         return 0
     print(f"Workdir: {workdir}")
     print(f"Books: {len(rows)}")
@@ -289,10 +293,15 @@ def cmd_show(args: argparse.Namespace) -> int:
     if not book_dir.is_dir() or not (book_dir / "book.json").is_file():
         msg = {"error": f"book not found: {args.bookId}", "workdir": str(workdir)}
         print(json.dumps(msg, ensure_ascii=False), file=sys.stderr)
+        emit_summary(f"FAILED: book not found: {args.bookId}", prefix="error")
         return 1
     stats = collect_summary(book_dir, deep=True)
     if args.json:
         print(json.dumps(stats, ensure_ascii=False, indent=2))
+        emit_summary(
+            f"action=show id={args.bookId} chapters={stats.get('totalChapters', 0)} "
+            f"words={stats.get('totalWords', 0)} status={stats.get('status', '?')}"
+        )
         return 0
     print(render_show_text(stats))
     return 0
@@ -324,6 +333,7 @@ def cmd_update(args: argparse.Namespace) -> int:
         print(json.dumps({"error": f"book not found: {args.bookId}",
                           "workdir": str(workdir)}, ensure_ascii=False),
               file=sys.stderr)
+        emit_summary(f"FAILED: book not found: {args.bookId}", prefix="error")
         return 1
 
     try:
@@ -398,6 +408,10 @@ def cmd_update(args: argparse.Namespace) -> int:
     }
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+        emit_summary(
+            f"action=update id={args.bookId} fields={','.join(sorted(updates.keys()))} "
+            f"warnings={len(warnings)}"
+        )
     else:
         print(f"Updated book \"{data.get('title', args.bookId)}\" ({args.bookId}):")
         for f, (o, n) in updates.items():
@@ -488,6 +502,10 @@ def cmd_rename(args: argparse.Namespace) -> int:
     }
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+        emit_summary(
+            f"action=rename {args.oldId} -> {args.newId} "
+            f"patchedReferences={len(patched)}"
+        )
     else:
         print(f"Renamed: {args.oldId} -> {args.newId}")
         print(f"Path: {dst}")
@@ -560,6 +578,11 @@ def cmd_delete(args: argparse.Namespace) -> int:
     }
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+        emit_summary(
+            f"action={action} id={args.bookId} chapters={summary['totalChapters']} "
+            f"words={summary['totalWords']}"
+            + (f" archivePath={new_path}" if new_path else "")
+        )
     else:
         if action == "archived":
             print(f"Archived \"{summary['title']}\" ({args.bookId}) -> {new_path}")
@@ -679,6 +702,10 @@ def cmd_copy(args: argparse.Namespace) -> int:
     }
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+        emit_summary(
+            f"action=copy {args.srcId} -> {args.newId} "
+            f"includeChapters={bool(args.include_chapters)}"
+        )
     else:
         print(f"Copied: {args.srcId} -> {args.newId}")
         print(f"Path: {dst}")

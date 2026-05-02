@@ -60,11 +60,13 @@ from settler_parse import (  # noqa: E402
     strip_code_fence,
     validate_delta,
 )
+from _schema import SCHEMA_VERSION  # noqa: E402  — single source of truth
 
 # Hook arbiter (port of inkos hook-arbiter.ts) — reshapes hookOps + new
 # candidates against the existing ledger BEFORE schema re-validation and
 # governance gate. Imported in-process to avoid a subprocess hop.
 from hook_arbitrate import arbitrate as arbitrate_hooks  # noqa: E402
+from _summary import emit_summary  # noqa: E402
 
 HOOK_GOVERNANCE_SCRIPT = Path(__file__).resolve().parent / "hook_governance.py"
 BOOK_LOCK_SCRIPT = Path(__file__).resolve().parent / "book_lock.py"
@@ -117,6 +119,31 @@ def append_text(p: Path, text: str) -> None:
     if existing and not existing.endswith("\n"):
         existing += "\n"
     atomic_write_text(p, existing + text + ("\n" if not text.endswith("\n") else ""))
+
+
+def ensure_schema_version(obj: dict, file_label: str, warnings: list[str]) -> dict:
+    """Auto-fill / sanity-check the top-level `schemaVersion` field.
+
+    * Missing → fill with SCHEMA_VERSION (no warning; first-time migration of
+      a pre-versioned file is silent and forward-compatible).
+    * Present + matches  → no-op.
+    * Present + mismatch → keep the existing value untouched (we don't auto-
+      migrate), but emit a warning to the apply_delta JSON output so the
+      caller knows a migration is overdue.
+
+    The dict is mutated in place AND returned for fluent chaining.
+    """
+    if not isinstance(obj, dict):
+        return obj
+    cur = obj.get("schemaVersion")
+    if cur is None:
+        obj["schemaVersion"] = SCHEMA_VERSION
+    elif cur != SCHEMA_VERSION:
+        warnings.append(
+            f"schemaVersion mismatch in {file_label}: file={cur!r} "
+            f"current={SCHEMA_VERSION!r} — see references/schemas/migration-log.md"
+        )
+    return obj
 
 
 def merge_dict(dst: dict, patch: dict) -> dict:
@@ -401,6 +428,11 @@ def emit_failure(parse_result: dict, *, feedback_format: str) -> int:
                 "parserFeedback": parse_result.get("parserFeedback", ""),
             }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+    n_issues = len(issues) if isinstance(issues, list) else (1 if issues else 0)
+    emit_summary(
+        f"FAILED: applied=False parseStage={stage} issues={n_issues} softFixes={len(fixes)}",
+        prefix="error",
+    )
     return 1
 
 
@@ -453,6 +485,10 @@ def main() -> int:
                     "clears it. Pass --skip-lock if you've already acquired it externally."
                 ),
             }, ensure_ascii=False, indent=2), file=sys.stderr)
+            emit_summary(
+                "FAILED: could not acquire book write lock (held by another owner)",
+                prefix="error",
+            )
             return 3
         lock_acquired = bool(lock_payload.get("ok") and not lock_payload.get("skipped"))
 
@@ -549,27 +585,34 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
 
     if "currentStatePatch" in delta:
         cs_p = state_dir / "current_state.json"
-        cur = load_json(cs_p, {"facts": []})
+        cur = load_json(cs_p, {"schemaVersion": SCHEMA_VERSION, "facts": []})
         if not isinstance(cur, dict):
             cur = {"facts": []}
+        ensure_schema_version(cur, "current_state.json", warnings)
         merge_dict(cur, delta["currentStatePatch"])
+        # currentStatePatch could theoretically clobber schemaVersion; re-assert.
+        ensure_schema_version(cur, "current_state.json", warnings)
         write_json(cs_p, cur)
         modified.append(str(cs_p))
 
     if "hookOps" in delta:
         hp = state_dir / "hooks.json"
-        cur = load_json(hp, {"hooks": []})
+        cur = load_json(hp, {"schemaVersion": SCHEMA_VERSION, "hooks": []})
         if not isinstance(cur, dict):
             cur = {"hooks": []}
+        ensure_schema_version(cur, "hooks.json", warnings)
         new_obj = apply_hook_ops(cur, delta["hookOps"], warnings)
+        # apply_hook_ops returns {"hooks": [...]} — preserve schemaVersion.
+        ensure_schema_version(new_obj, "hooks.json", warnings)
         write_json(hp, new_obj)
         modified.append(str(hp))
 
     if "chapterSummary" in delta:
         sp = state_dir / "chapter_summaries.json"
-        cur = load_json(sp, {"summaries": []})
+        cur = load_json(sp, {"schemaVersion": SCHEMA_VERSION, "summaries": []})
         if not isinstance(cur, dict):
             cur = {"summaries": []}
+        ensure_schema_version(cur, "chapter_summaries.json", warnings)
         cur.setdefault("summaries", []).append(delta["chapterSummary"])
         write_json(sp, cur)
         modified.append(str(sp))
@@ -671,6 +714,29 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         "hookGovernanceBlocked": governance_blocked,
         "bookMetadata": book_metadata,
     }, ensure_ascii=False, indent=2))
+    chapter_label = "?"
+    if isinstance(delta, dict):
+        ch = delta.get("chapter")
+        if not isinstance(ch, int):
+            cs = delta.get("chapterSummary")
+            if isinstance(cs, dict) and isinstance(cs.get("chapter"), int):
+                ch = cs["chapter"]
+        if isinstance(ch, int):
+            chapter_label = str(ch)
+    files_n = len(set(modified))
+    soft_n = len(soft_fixes) if isinstance(soft_fixes, list) else 0
+    warn_n = len(warnings)
+    if governance_blocked:
+        emit_summary(
+            f"BLOCKED: hook governance critical (ch={chapter_label} files={files_n} "
+            f"softFixes={soft_n} warnings={warn_n})",
+            prefix="error",
+        )
+    else:
+        emit_summary(
+            f"applied=True ch={chapter_label} files={files_n} softFixes={soft_n} "
+            f"warnings={warn_n} parseStage=applied"
+        )
     return 1 if governance_blocked else 0
 
 

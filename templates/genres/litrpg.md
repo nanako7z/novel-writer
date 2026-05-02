@@ -10,6 +10,22 @@ eraResearch: false
 pacingRule: "Every 1-3 chapters early: level-up or stat gain. Mid-story every 5-10 chapters. Late story: tier transitions spaced far apart."
 satisfactionTypes: ["Level Up", "Skill Unlock", "Loot Drop", "Boss Kill", "Tier Breakthrough", "System Secret Revealed"]
 auditDimensions: [1,2,3,4,5,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 3
+  satisfactionSequence:
+    - {type: "Level Up",                weight: 3}
+    - {type: "Skill Unlock",            weight: 3}
+    - {type: "Loot Drop",               weight: 2}
+    - {type: "Boss Kill",               weight: 2}
+    - {type: "Tier Breakthrough",       weight: 2}
+    - {type: "System Secret Revealed",  weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Setup", "Progression"],           satisfactionPerN: 4}
+    middle: {chapterTypes: ["Progression", "Combat"],          satisfactionPerN: 3}
+    late:   {chapterTypes: ["Combat", "Payoff"],               satisfactionPerN: 2}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",     action: "force-switch-type"}
+    - {pattern: "3 consecutive chapters without satisfaction", action: "satisfactionEmergency"}
 ---
 
 ## Genre Prohibitions

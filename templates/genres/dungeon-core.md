@@ -10,6 +10,22 @@ eraResearch: false
 pacingRule: "Alternate dungeon POV (planning/building) with adventurer POV (exploration/combat) every 1-2 chapters. Expansion milestone every 5-8 chapters."
 satisfactionTypes: ["Trap Success", "Floor Expansion", "Minion Evolution", "Adventurer Defeated", "Resource Milestone", "Core Upgrade"]
 auditDimensions: [1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 6
+  satisfactionSequence:
+    - {type: "Trap Success",        weight: 3}
+    - {type: "Adventurer Defeated", weight: 3}
+    - {type: "Floor Expansion",     weight: 2}
+    - {type: "Minion Evolution",    weight: 2}
+    - {type: "Core Upgrade",        weight: 2}
+    - {type: "Resource Milestone",  weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Setup", "Strategy"],               satisfactionPerN: 10}
+    middle: {chapterTypes: ["Strategy", "Adventurer POV"],      satisfactionPerN: 5}
+    late:   {chapterTypes: ["Adventurer POV", "Payoff"],        satisfactionPerN: 3}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType",      action: "force-switch-type"}
+    - {pattern: "6 consecutive chapters without satisfaction",  action: "satisfactionEmergency"}
 ---
 
 ## Genre Prohibitions

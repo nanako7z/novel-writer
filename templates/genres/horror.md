@@ -9,6 +9,23 @@ eraResearch: false
 pacingRule: "氛围递进：安全感→微妙不适→确认异常→恐惧升级→高潮→喘息，循环推进"
 satisfactionTypes: ["真相揭示", "成功逃脱", "反杀怪物", "谜团解开", "同伴获救", "规则发现"]
 auditDimensions: [1,2,3,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 3
+  satisfactionSequence:
+    - {type: "规则发现",   weight: 3}
+    - {type: "真相揭示",   weight: 3}
+    - {type: "成功逃脱",   weight: 2}
+    - {type: "谜团解开",   weight: 2}
+    - {type: "反杀怪物",   weight: 1}
+    - {type: "同伴获救",   weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["氛围章", "事件章"],   satisfactionPerN: 5}
+    middle: {chapterTypes: ["事件章", "揭示章"],   satisfactionPerN: 3}
+    late:   {chapterTypes: ["揭示章", "回收章"],   satisfactionPerN: 2}
+  fatigueGuards:
+    - {pattern: "连续 3 章同 chapterType",        action: "force-switch-type"}
+    - {pattern: "连续 3 章无爽点",                 action: "satisfactionEmergency"}
+    - {pattern: "连续 4 章高紧张 mood",            action: "lower-tension"}
 ---
 
 ## 题材禁忌
