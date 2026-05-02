@@ -117,7 +117,9 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "AI 味太重，专项处理" | phase 10 `anti-detect` 模式，先跑 `scripts/ai_tell_scan.py` 拿证据 |
 | "重做架构" | phase 04 architect 单跑 |
 | "看下伏笔池压力 / 伏笔健康度" | `python scripts/hook_governance.py --book <bookDir> --command health-report` |
-| "校验一下真理文件没问题吧" | `python scripts/hook_governance.py --book <bookDir> --command validate` |
+| "校验一下真理文件没问题吧" | `python scripts/hook_governance.py --book <bookDir> --command validate` + `python scripts/chapter_index.py --book <bookDir> validate` |
+| "看下哪些章节待审 / 已通过 / review list" | `python scripts/chapter_index.py --book <bookDir> list --status ready-for-review`（或 `approved` / `audit-failed` 等） |
+| "把第 N 章标记为 approved / 已发布" | `python scripts/chapter_index.py --book <bookDir> set-status --chapter N --status approved`（或 `published` / `rejected`） |
 | "压缩前面卷 / consolidate / 摘要太多了 / 历史压缩一下" | 先跑 `python scripts/consolidate_check.py --book <bookDir>` 看是否该压；该压则进 [phase 12 consolidator](references/phases/12-consolidator.md) |
 | "列出我所有书 / book list" | `python scripts/book.py list` |
 | "看下《XX》详情 / book show" | `python scripts/book.py show <bookId>` |
@@ -182,7 +184,11 @@ python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <settler.raw
 python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <runtime/chapter-NNNN.delta.json>
 ```
 
-脚本走 3 阶段 parser：(1) lenient 提 RUNTIME_STATE_DELTA 块（容忍前后 prose）；(2) soft-fix（key alias / 类型 coercion / 数组 wrap，详见 [schemas/runtime-state-delta.md](references/schemas/runtime-state-delta.md) §1b）；(3) 严格 schema 校验。原子写入（`.tmp` + rename），按字段路由到对应文件，并**自动调用** `hook_governance.py` 的 `validate` + `stale-scan` 作为闸门：
+脚本走 3 阶段 parser：(1) lenient 提 RUNTIME_STATE_DELTA 块（容忍前后 prose）；(2) soft-fix（key alias / 类型 coercion / 数组 wrap，详见 [schemas/runtime-state-delta.md](references/schemas/runtime-state-delta.md) §1b）；(3) 严格 schema 校验。原子写入（`.tmp` + rename），按字段路由到对应文件，并**自动调用** `hook_governance.py` 的 `validate` + `stale-scan` 作为闸门。
+
+**注意**：apply_delta.py 不写 `chapters/index.json`——那个是**章节运营索引**（status / auditIssues / wordCount / token usage / 时间戳），由 orchestration step 11 完成章节落盘后单独调 [`chapter_index.py`](references/schemas/chapter-index.md) 写。两者关注点不同：apply_delta 管真理文件（叙事增量）；chapter_index 管章节生命周期状态（运营 / 审核 / 出版）。
+
+apply_delta 的具体行为：
 
 - 解析失败：返回 `parserFeedback`（结构化反馈）→ 喂回 Settler 让它修，不是直接 crash
 - `validate` 报 critical → 退出码 1，`hookGovernanceBlocked: true`，要求 Settler 重写而不是落盘
@@ -243,9 +249,10 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── inkos.json + book.json   元数据种子
 │   ├── story/{*.md, state/*.json}  真理文件种子
 │   └── genres/                  15 题材 profile（init 时按 --genre 选用）
-├── scripts/                     28 个 Python 脚本
+├── scripts/                     29 个 Python 脚本
 │   ├── init_book.py             创建 books/<id>/ 子树
 │   ├── book.py                  多书 CRUD（list / show / rename / delete / copy；删除默认归档）
+│   ├── chapter_index.py         章节运营索引（add/update/set-status/list/get/validate；orchestration step 11 自动写）
 │   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook 仲裁 + governance）
 │   ├── settler_parse.py         Settler 输出独立 parser（debug 用）
 │   ├── hook_governance.py       promote-pass / stale-scan / validate / health-report

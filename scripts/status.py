@@ -131,9 +131,16 @@ def collect_book_stats(book_dir: Path, *, with_chapters: bool) -> dict:
     chapter_files = list_chapter_files(book_dir)
     total_chapters = len(chapter_files)
 
-    # Pull per-chapter audit status from chapter_summaries.json (if status field
-    # exists).  inkos's index.json has `status`, but in SKILL form we keep it
-    # in chapter_summaries rows when present.
+    # Per-chapter status: prefer chapters/index.json (operational index) when
+    # present; fall back to chapter_summaries.json status field.  index.json is
+    # the authoritative source per references/schemas/chapter-index.md.
+    index_obj = _safe_load_json(book_dir / "chapters" / "index.json", []) or []
+    index_by_ch: dict[int, dict] = {}
+    if isinstance(index_obj, list):
+        for row in index_obj:
+            if isinstance(row, dict) and isinstance(row.get("number"), int):
+                index_by_ch[row["number"]] = row
+
     summaries_obj = _safe_load_json(state_dir / "chapter_summaries.json",
                                     {"summaries": []}) or {}
     summaries = summaries_obj.get("summaries", []) if isinstance(summaries_obj, dict) else []
@@ -162,10 +169,12 @@ def collect_book_stats(book_dir: Path, *, with_chapters: bool) -> dict:
         if mtime and (last_modified is None or mtime > last_modified):
             last_modified = mtime
 
-        row = summary_by_ch.get(ch_num) or {}
-        status = row.get("status")  # may be None when SKILL doesn't track it
-        title = row.get("title") or ""
-        if status and status != "approved":
+        # index.json wins; chapter_summaries.json is the fallback
+        idx_row = index_by_ch.get(ch_num) or {}
+        sum_row = summary_by_ch.get(ch_num) or {}
+        status = idx_row.get("status") or sum_row.get("status")
+        title = idx_row.get("title") or sum_row.get("title") or ""
+        if status and status not in ("approved", "published"):
             pending_review += 1
 
         if with_chapters:

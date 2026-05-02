@@ -213,9 +213,25 @@ function writeNextChapter(book):
         log polish: skipped (borderline score=<n>)
     # audit 未过则根本不到这一步——Reviser 已经在 step 7 处理过了
 
-    # ── 11. 最终落盘章节正文 ─────────────────────────────────
+    # ── 11. 最终落盘章节正文 + 章节运营索引 ──────────────────
     write chapters/{NNNN}.md = draft
     update story/state/manifest.json#lastAppliedChapter = chapterNo
+
+    # 11.0 写章节运营索引（chapters/index.json）—— inkos `inkos review list` /
+    # `analytics` / `book delete --json` 等都从这里读章节状态。
+    # schema: references/schemas/chapter-index.md
+    chapterStatus = passed ? "ready-for-review" : "audit-failed"
+    auditIssuesFmt = [f"[{i.severity}] {i.description}" for i in allIssues]
+    scripts/chapter_index.py --book <bookDir> add \
+        --chapter chapterNo \
+        --status chapterStatus \
+        --title <chapter title from chapter_memo or writer> \
+        --word-count finalWordCount \
+        --audit-issues <JSON-encoded auditIssuesFmt> \
+        [--length-warnings <JSON if any>] \
+        [--token-usage <JSON if tracked>] \
+        [--review-note "polish-reverted-introduced-issues" if applicable]
+    # 退出码非 0 即视为索引写入失败——记 warning 但不 abort（章节正文已落盘）。
 
     # ── 11.05 Chapter Analyzer (post-persist 定性回顾) ─────────
     # references/phases/13-analyzer.md

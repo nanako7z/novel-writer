@@ -85,6 +85,7 @@ EXPECTED_SCRIPTS = [
     "narrative_control.py",
     "writing_methodology.py",
     "spot_fix_patches.py",
+    "chapter_index.py",
 ]
 
 CHAPTER_NAME_OK = re.compile(r"^\d{4}\.md$")
