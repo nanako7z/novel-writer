@@ -19,6 +19,32 @@ Claude 在这一阶段需要读：
 - `story/state/hooks.json` ——筛 stale hooks（pressured / near_payoff 且 ≥ 5 章未推进）
 - 如果 chapterNumber ≤ 3，需要触发"黄金三章"指引段
 - 上一章正文文件（取最后一屏作为 `previous_chapter_ending_excerpt`）
+- **上章 Analyzer 反馈**：`story/runtime/chapter-{N-1}.analysis.json`（如存在）——由 [phase 13 Chapter Analyzer](13-analyzer.md) 在上章落盘后产出的定性回顾，包含 `warningsForNextChapter`、`fatigueSignals` 等下章 Planner 必须消费的硬信号
+
+## 上章 Analyzer 的反馈（载入与消费）
+
+[Phase 13 Chapter Analyzer](13-analyzer.md) 在每章落盘后会产出 `story/runtime/chapter-{N-1}.analysis.json`，本阶段 Planner **必须**先尝试读这份文件（如果 `currentChapter > 1`）。
+
+**消费规则：**
+
+1. **读取**：尝试读 `story/runtime/chapter-{N-1}.analysis.json`。
+   - 文件不存在 → 视为无定性输入，按常规走（不抛错）。
+   - 文件存在但 `warning === "analyzer-failed"` → 同上，stub 文件代表 Analyzer 跑挂了，不阻断。
+2. **`warningsForNextChapter` → 必须正面回应**：每条 warning 在生成 chapter_memo 时按以下规则映射：
+   - 形如 `"H001 已连续 3 章未推进，下章必须推一下"` → 在 `## 本章 hook 账` 的 `advance` 或 `resolve` 段落显式列出 `H001`，**不能 defer**。
+   - 形如 `"chapter_memo 承诺的『七号门实证』只兑现一半，下章需补完"` → 在 `## 该兑现的 / 暂不掀的` 段补一条「续兑现：七号门实证」。
+   - 形如 `"AI 味集中在 X 段，下章注意"` → 在 `## 不要做` 段加一条具体的避坑点。
+3. **`fatigueSignals` → 灌进 `## 不要做`**：每条 `"'冷笑' 出现 4 次"` 直接转成 `## 不要做` 里的一条「本章避免使用 '冷笑' 等上章疲劳词」。
+4. **`reusableMotifs`、`pacingBeats`、`satisfactionHits`** 是软性参考，可以参考但不强制——主要用于让 Planner 判断本章是该重复成功配方还是需要换节奏（避免连续 3 章打同一个爽点）。
+5. **冲突仲裁**：如果多条 `warningsForNextChapter` 是 `priority: "high"` 且互相挤压（例如同时要求兑现 3 个 hook + 推主线 + 补 audit critical），且本章 `chapterWordCount` 装不下 → **不要硬塞**，把冲突摘要给用户：
+   - "上章 Analyzer 给本章压了 3 条 high-priority 信号：A / B / C，估计装不下，按优先级建议留 A+B 推到下章。要不要这样？"
+   - 用户决策后再生成 memo；不要 Planner 自己悄悄丢掉信号。
+6. **不要发明 hook_id**：warning 里引用的 hook_id 必须在当前 `pending_hooks.md` 里能查到才能进 advance/resolve；查不到（已被 resolve 或被 settler 删除）就把这条 warning 转成 `## 不要做` 里的一条说明（"不要再提及 H001，已收"）。
+
+**写入位置 cheat sheet**：
+- 兑现型 warning → `## 该兑现的 / 暂不掀的`
+- hook 推进型 warning → `## 本章 hook 账`（advance / resolve）
+- 避坑型 warning + fatigueSignals → `## 不要做`
 
 ## Process
 
@@ -126,6 +152,7 @@ defer:
 ### 工作步骤
 
 1. **采集材料**。按 Inputs 顺序读文件；不存在的文件一律视作空（不要伪造内容）。
+1a. **载入上章 Analyzer 反馈**（仅当 `chapterNumber > 1`）：尝试读 `story/runtime/chapter-{N-1}.analysis.json`，按上节"上章 Analyzer 的反馈"规则分流到 hook 账 / 该兑现的 / 不要做 三栏的输入材料中。文件缺失或 `warning === "analyzer-failed"` 即跳过，不阻断。
 2. **筛 stale hooks**：扫 `story/state/hooks.json`，挑出 `status ∈ {pressured, near_payoff}` 且 `chapterNumber - lastAdvancedChapter >= 5` 的 hook，作为「必须本章处理」清单注入用户消息。
 3. **判定 isGoldenOpening**：`chapterNumber <= 3` → true，并附加黄金三章指引段（见下文）。
 4. **拼装用户消息**。按 inkos `PLANNER_MEMO_USER_TEMPLATE` 的 7 段结构填模板：brief_block / 上一章最后一屏 / 最近 3 章摘要 / 当前 arc / 主角行 / 对手行 / 协作者行 / 相关 thread / 必须回收的陈旧 hook / 卷外约束。

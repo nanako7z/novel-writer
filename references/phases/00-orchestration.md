@@ -217,6 +217,27 @@ function writeNextChapter(book):
     write chapters/{NNNN}.md = draft
     update story/state/manifest.json#lastAppliedChapter = chapterNo
 
+    # ── 11.05 Chapter Analyzer (post-persist 定性回顾) ─────────
+    # references/phases/13-analyzer.md
+    # 章节正文 + 真理文件全部定稿后，跑一次单向只读的定性回顾。
+    # 产物 chapter-{NNNN}.analysis.json 是给下一章 Planner 的喂料——
+    # 关心的是"读起来怎么样、对下一章有什么交代"，不是事实增量
+    # （事实增量是 Settler 在 step 9 干的）。
+    analysis = runChapterAnalyzer(
+        chapterFile        = chapters/{NNNN}.md,           # Polisher 后的最终版
+        chapterMemo        = story/runtime/chapter_memo.md
+                          OR story/runtime/chapter-{NNNN}.intent.md,
+        auditResult        = story/runtime/chapter-{NNNN}.audit.json (可选),
+        observations       = story/runtime/observations.md (可选),
+        hooksSnapshot      = story/state/hooks.json,
+        genreProfile       = templates/genres/{book.genre}.md,
+        bookConfig         = book.json
+    )
+    # 落盘：story/runtime/chapter-{NNNN}.analysis.json
+    # 失败处理：解析失败重试 ≤ 2，仍失败写 stub（warning="analyzer-failed"），
+    #           不阻断主循环——Analyzer 是信息性的，不是 load-bearing。
+    # 关键不变量：Analyzer 单向只读，绝不修改 chapters/* 或 story/state/*。
+
     # ── 11.1 (可选) Consolidate 自动建议 —— 不擅自跑 ──────────
     # references/phases/12-consolidator.md
     # 落盘 + manifest 更新后，跑一次只读检测脚本：
@@ -258,6 +279,7 @@ function writeNextChapter(book):
 4. **每个 phase 的产物都先写到 `story/runtime/`，最终章节 + delta 才落到 `chapters/` 与 `story/state/`**——保证可回溯、可重跑。
 5. **任何阶段的 LLM 输出若解析失败，重试 ≤ 该阶段上限（Planner 3、Architect 2、audit-revise 整轮 3）**，不要无限重试。
 6. **Reflector 不是单独阶段**——README 提到了，但源码里它的职责并入了 audit-revise loop（"反思+修改"是同一阶段的两面）；本 SKILL 也合并不单列。
+7. **Chapter Analyzer (step 11.05, [13-analyzer.md](13-analyzer.md)) 是单向只读**——它只读已定稿的本章正文与配套 runtime/state，产物只有 `story/runtime/chapter-{NNNN}.analysis.json` 一份，**不**修改 `chapters/*`、`story/state/*` 或 `pending_hooks.md`。失败也不阻断主循环（写 stub），区别于 Auditor / Settler 这两个 load-bearing 阶段。
 
 ## 何时**跳过**主循环
 

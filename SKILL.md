@@ -95,6 +95,7 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | 10 | [reviser](references/phases/10-reviser.md) | 6 模式修订（auto/polish/rewrite/rework/anti-detect/spot-fix） |
 | 11 | [polisher](references/phases/11-polisher.md) | audit 真正过线（≥88）后的文字层打磨，单 pass、不动情节 |
 | 12 | [consolidator](references/phases/12-consolidator.md) | 卷级摘要压缩 + 历史归档（手动触发；先跑 `consolidate_check.py` 检测） |
+| 13 | [chapter analyzer](references/phases/13-analyzer.md) | 章节落盘后的定性回顾，写 `analysis.json` 喂下章 Planner（单向只读，不改任何真理文件） |
 
 **主循环关键不变量**（违反就停下）：
 
@@ -118,7 +119,9 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "看下伏笔池压力 / 伏笔健康度" | `python scripts/hook_governance.py --book <bookDir> --command health-report` |
 | "校验一下真理文件没问题吧" | `python scripts/hook_governance.py --book <bookDir> --command validate` |
 | "压缩前面卷 / consolidate / 摘要太多了 / 历史压缩一下" | 先跑 `python scripts/consolidate_check.py --book <bookDir>` 看是否该压；该压则进 [phase 12 consolidator](references/phases/12-consolidator.md) |
-| "看一下当前进度" | 读 `story/state/manifest.json` + `chapter_summaries.json`，直接答 |
+| "看一下当前进度 / status" | `python scripts/status.py [--book <bookDir>] [--chapters]`（默认列所有书） |
+| "环境体检 / doctor / 看下 SKILL 是否完整" | `python scripts/doctor.py [--book <bookDir>]`（self-test 12 个脚本 + templates 完整性 + 可选 book 子树校验） |
+| "看下 token 用量 / 字数曲线 / 通过率 / analytics" | `python scripts/analytics.py --book <bookDir> [--chapters] [--detection]` |
 
 ## 同人 / 风格分支
 
@@ -208,7 +211,7 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 {SKILL_ROOT}/
 ├── SKILL.md                     ← 你正在读
 ├── references/
-│   ├── phases/00-12-*.md        13 个阶段（编排 + radar + 10 agent + polisher + consolidator）
+│   ├── phases/00-13-*.md        14 个阶段（编排 + radar + 10 agent + polisher + consolidator + chapter analyzer）
 │   ├── branches/{fanfic,style}.md
 │   ├── rule-stack.md            四级规则栈
 │   ├── genre-profile.md         15 题材 profile schema + 注入指南
@@ -224,7 +227,7 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── inkos.json + book.json   元数据种子
 │   ├── story/{*.md, state/*.json}  真理文件种子
 │   └── genres/                  15 题材 profile（init 时按 --genre 选用）
-├── scripts/                     12 个 Python 脚本
+├── scripts/                     15 个 Python 脚本
 │   ├── init_book.py             创建 books/<id>/ 子树
 │   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook governance）
 │   ├── settler_parse.py         Settler 输出独立 parser（debug 用）
@@ -233,6 +236,9 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── consolidate_check.py     phase 12 触发检测（read-only）
 │   ├── writer_parse.py          Writer 输出 sentinel 严格 parser
 │   ├── post_write_validate.py   写后检（机械错 / 段落 / 对话标点 / 注释泄漏）
+│   ├── status.py                项目速查（多书 / 单书 / 章节明细）
+│   ├── doctor.py                环境 + 模板 + 脚本自检
+│   ├── analytics.py             token 用量 / 通过率 / 字数曲线 / 钩子活动
 │   ├── word_count.py            LengthSpec 区间判定
 │   ├── style_analyze.py         5 项纯文本风格统计
 │   ├── ai_tell_scan.py          去 AI 味确定性闸门
