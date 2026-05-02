@@ -30,6 +30,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _summary import emit_summary  # noqa: E402
+from _constants import BOOK_STATUS, PLATFORM  # noqa: E402  — single source of truth
 
 CHAPTER_NAME_RE = re.compile(r"^(\d{4})\.md$")
 KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -311,8 +312,8 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 # --------------------------- update ----------------------------------------
 
-VALID_STATUSES = {"incubating", "outlining", "active", "paused", "completed", "archived"}
-VALID_PLATFORMS = {"tomato", "feilu", "qidian", "other"}
+VALID_STATUSES = BOOK_STATUS
+VALID_PLATFORMS = PLATFORM
 VALID_LANGS = {"zh", "en"}
 
 # (book.json field name, argparse attr, type, validator)

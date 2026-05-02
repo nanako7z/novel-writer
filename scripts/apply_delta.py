@@ -61,6 +61,7 @@ from settler_parse import (  # noqa: E402
     validate_delta,
 )
 from _schema import SCHEMA_VERSION  # noqa: E402  — single source of truth
+from _constants import BOOK_STATUS_INITIAL  # noqa: E402  — single source of truth
 
 # Hook arbiter (port of inkos hook-arbiter.ts) — reshapes hookOps + new
 # candidates against the existing ledger BEFORE schema re-validation and
@@ -240,7 +241,7 @@ def _bump_book_metadata(book_dir: Path, chapter_no: int | None) -> dict:
     status_after = status_before
     # First-chapter status flip — chapter 1 is the canonical "we started" point.
     # Honor incubating + outlining (inkos uses outlining; we default to incubating).
-    if chapter_no == 1 and status_before in ("incubating", "outlining"):
+    if chapter_no == 1 and status_before in BOOK_STATUS_INITIAL:
         status_after = "active"
 
     if book.get("updatedAt") == now_iso and status_after == status_before:

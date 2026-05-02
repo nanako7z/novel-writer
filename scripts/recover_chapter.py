@@ -41,6 +41,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _chapter_files import find_chapter_file  # noqa: E402
+
 # Phase order, from earliest to latest. Each entry is (phase, artifact_filename,
 # whether-the-artifact-being-present-implies-this-phase-completed). All entries
 # default to True; we keep the tuple shape for symmetry.
@@ -101,9 +104,8 @@ def detect_latest_phase(present: dict[str, Path]) -> str:
 
 
 def chapter_finalized(book_dir: Path, chapter_no: int) -> bool:
-    """Has chapters/{NNNN}.md landed AND manifest been advanced past N-1?"""
-    chapter_md = book_dir / "chapters" / f"{chapter_no:04d}.md"
-    if not chapter_md.is_file():
+    """Has chapters/{NNNN}[_<title>].md landed AND manifest been advanced past N-1?"""
+    if find_chapter_file(book_dir, chapter_no) is None:
         return False
     manifest = load_json(book_dir / "story" / "state" / "manifest.json", {})
     last_applied = int(manifest.get("lastAppliedChapter", 0) or 0)

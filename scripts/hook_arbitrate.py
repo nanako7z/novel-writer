@@ -47,7 +47,11 @@ from typing import Any
 
 # ─────────────────────────── constants ───────────────────────────
 
-VALID_PAYOFF_TIMING = ("immediate", "near-term", "mid-arc", "slow-burn", "endgame")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _constants import PAYOFF_TIMING as _PAYOFF_TIMING  # noqa: E402
+
+# Legacy alias — kept so external callers importing from this module still work.
+VALID_PAYOFF_TIMING = _PAYOFF_TIMING
 
 # `STOP_WORDS` mirrors the union of the two stop-word sets in inkos
 # (`hook-arbiter.ts` adds chapter/about/already/question on top of the

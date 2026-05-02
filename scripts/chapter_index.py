@@ -59,13 +59,8 @@ from _summary import emit_summary  # noqa: E402
 
 WRITE_COMMANDS = {"add", "update", "set-status"}
 
-CHAPTER_STATUS = {
-    "card-generated", "drafting", "drafted",
-    "auditing", "audit-passed", "audit-failed", "state-degraded",
-    "revising", "ready-for-review",
-    "approved", "rejected",
-    "published", "imported",
-}
+from _constants import CHAPTER_STATUS  # noqa: E402  — single source of truth
+from _chapter_files import find_chapter_file, list_chapter_files  # noqa: E402
 
 
 def _import_book_lock():
@@ -393,15 +388,30 @@ def cmd_validate(args: argparse.Namespace) -> dict:
                 "description": f"chapter numbers missing in [{nums[0]}, {nums[-1]}]: {missing}",
             })
 
-    # cross-check: each entry has a corresponding chapters/{NNNN}.md file
+    # cross-check: each entry has a corresponding chapters/{NNNN}.md
+    # OR chapters/{NNNN}_<title>.md (inkos naming) file. Both forms are
+    # accepted; duplicate (both present) is reported as critical.
     for n in seen_numbers:
-        f = book_dir / "chapters" / f"{n:04d}.md"
-        if not f.is_file():
+        matches = list_chapter_files(book_dir, n)
+        if not matches:
             issues.append({
                 "severity": "warning",
                 "category": "missing-file",
                 "chapter": n,
-                "description": f"index references chapter {n} but file not found: {f}",
+                "description": (
+                    f"index references chapter {n} but no file found at "
+                    f"{book_dir / 'chapters'}/{n:04d}.md or {n:04d}_*.md"
+                ),
+            })
+        elif len(matches) > 1:
+            issues.append({
+                "severity": "critical",
+                "category": "duplicate-file",
+                "chapter": n,
+                "description": (
+                    f"chapter {n} has multiple files on disk: "
+                    f"{', '.join(p.name for p in matches)}"
+                ),
             })
 
     counts = {

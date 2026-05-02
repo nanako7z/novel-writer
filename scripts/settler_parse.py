@@ -43,9 +43,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-VALID_HOOK_OPS = {"upsert", "mention", "resolve", "defer"}
-VALID_HOOK_STATUS = {"open", "progressing", "deferred", "resolved"}
-VALID_PAYOFF_TIMING = ["immediate", "near-term", "mid-arc", "slow-burn", "endgame"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _constants import HOOK_OPS, HOOK_STATUS, PAYOFF_TIMING  # noqa: E402
+
+# Re-exported under legacy names (apply_delta + others import these).
+VALID_HOOK_OPS = HOOK_OPS
+VALID_HOOK_STATUS = HOOK_STATUS
+VALID_PAYOFF_TIMING = PAYOFF_TIMING
 
 
 # ───────────────────────────── stage 1: extract ─────────────────────────────

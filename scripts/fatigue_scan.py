@@ -38,6 +38,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _chapter_files import find_chapter_file  # noqa: E402
+
 # ─────────────────── constants ────────────────────────────────
 
 # Particles / fillers that should not anchor n-gram detection.
@@ -72,8 +75,8 @@ PAIR_OVERHEAT_THRESHOLD = 3   # ≥ N consecutive chapters with same A→B patte
 
 
 def load_chapter(book_dir: Path, chapter: int) -> str | None:
-    p = book_dir / "chapters" / f"{chapter:04d}.md"
-    if not p.exists():
+    p = find_chapter_file(book_dir, chapter)
+    if p is None:
         return None
     try:
         return p.read_text(encoding="utf-8")

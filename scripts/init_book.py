@@ -19,6 +19,7 @@ TEMPLATES_DIR = SKILL_ROOT / "templates"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _summary import emit_summary  # noqa: E402
+from _constants import FANFIC_MODE, PLATFORM  # noqa: E402  — single source of truth
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
@@ -83,11 +84,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--id", required=True, help="bookId (kebab-case)")
     p.add_argument("--title", required=True)
     p.add_argument("--genre", required=True)
-    p.add_argument("--platform", required=True, choices=["tomato", "feilu", "qidian", "other"])
+    p.add_argument("--platform", required=True, choices=sorted(PLATFORM))
     p.add_argument("--target-chapters", type=int, default=100)
     p.add_argument("--chapter-words", type=int, default=3000)
     p.add_argument("--lang", default="zh", choices=["zh", "en"])
-    p.add_argument("--fanfic-mode", choices=["canon", "au", "ooc", "cp"], default=None)
+    p.add_argument("--fanfic-mode", choices=sorted(FANFIC_MODE), default=None)
     p.add_argument("--parent-book-id", default=None)
     p.add_argument("--brief", default=None,
                    help="Path to a creative brief markdown file. If given, "

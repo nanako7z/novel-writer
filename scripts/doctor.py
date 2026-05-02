@@ -97,9 +97,10 @@ EXPECTED_SCRIPTS = [
     "genre.py",
     "context_budget.py",
     "book_lock.py",
+    "e2e_test.py",
 ]
 
-CHAPTER_NAME_OK = re.compile(r"^\d{4}\.md$")
+CHAPTER_NAME_OK = re.compile(r"^\d{4}(_[^/]*)?\.md$")
 
 
 # ---------- check primitive ------------------------------------------------
@@ -247,10 +248,10 @@ def check_book(book_dir: Path) -> list[dict]:
     bad_named = [f.name for f in chap_files if not CHAPTER_NAME_OK.match(f.name)]
     if bad_named:
         out.append(make("chapter naming", "fail",
-                        f"non-NNNN.md: {', '.join(bad_named[:5])}"))
+                        f"non-NNNN[_<title>].md: {', '.join(bad_named[:5])}"))
     else:
         out.append(make("chapter naming", "ok",
-                        f"{len(chap_files)} files match NNNN.md"))
+                        f"{len(chap_files)} files match NNNN[_<title>].md"))
 
     if last_applied > len(chap_files):
         out.append(make("manifest vs chapters", "fail",
@@ -355,6 +356,56 @@ def check_book(book_dir: Path) -> list[dict]:
 
 # ---------- main -----------------------------------------------------------
 
+def check_e2e_chain(timeout_sec: int = 30) -> dict:
+    """Content-level smoke: invoke e2e_test.py to chain all 16 deterministic
+    glue scripts against synthesized fixtures. Catches contract drift that
+    --help can't see (e.g., field renamed in one writer but not its readers).
+
+    Runs in a tempdir owned by e2e_test; fails iff any of the 16 steps fails.
+    """
+    e2e = SKILL_ROOT / "scripts" / "e2e_test.py"
+    if not e2e.is_file():
+        return make("e2e chain", "warning", "scripts/e2e_test.py missing")
+    try:
+        res = subprocess.run(
+            [sys.executable, str(e2e), "--json"],
+            capture_output=True, text=True, timeout=timeout_sec,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+    except subprocess.TimeoutExpired:
+        return make("e2e chain", "fail",
+                    f"timeout after {timeout_sec}s (chain hung)")
+    except Exception as e:  # noqa: BLE001
+        return make("e2e chain", "fail", f"launch failed: {e!r}")
+
+    try:
+        report = json.loads(res.stdout) if res.stdout.strip() else {}
+    except json.JSONDecodeError as e:
+        return make("e2e chain", "fail",
+                    f"invalid JSON output: {e!r} (stderr: {res.stderr.strip()[:200]})")
+
+    total = report.get("totalSteps", 0)
+    passed = report.get("passed", 0)
+    failed = report.get("failed", total - passed)
+    elapsed = report.get("elapsedSeconds", "?")
+
+    if total == 0:
+        return make("e2e chain", "fail", "no steps reported by harness")
+    if failed == 0:
+        return make("e2e chain", "ok",
+                    f"{passed}/{total} steps in {elapsed}s")
+
+    # Failed: collect first-2 failure summaries so doctor user sees the cause.
+    failed_summaries = [
+        f"{s.get('name')}: {s.get('summary', '')[:60]}"
+        for s in report.get("steps", [])
+        if not s.get("ok")
+    ][:2]
+    detail = (f"{failed}/{total} failed in {elapsed}s"
+              + (" — " + " | ".join(failed_summaries) if failed_summaries else ""))
+    return make("e2e chain", "fail", detail)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="SKILL environment + (optional) book health checklist.",
@@ -364,6 +415,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--json", action="store_true", help="JSON output")
     p.add_argument("--skip-script-help", action="store_true",
                    help="skip the --help smoke test (faster)")
+    p.add_argument("--skip-e2e", action="store_true",
+                   help="skip the end-to-end chain check (faster; --help only)")
+    p.add_argument("--e2e-timeout", type=int, default=30,
+                   help="seconds to wait for e2e chain (default: 30)")
     return p.parse_args()
 
 
@@ -375,6 +430,8 @@ def main() -> int:
     checks.append(check_templates())
     if not args.skip_script_help:
         checks.extend(check_scripts_help())
+    if not args.skip_e2e:
+        checks.append(check_e2e_chain(timeout_sec=args.e2e_timeout))
 
     if args.book:
         checks.extend(check_book(Path(args.book).resolve()))
