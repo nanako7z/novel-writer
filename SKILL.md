@@ -120,6 +120,11 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "校验一下真理文件没问题吧" | `python scripts/hook_governance.py --book <bookDir> --command validate` + `python scripts/chapter_index.py --book <bookDir> validate` |
 | "看下哪些章节待审 / 已通过 / review list" | `python scripts/chapter_index.py --book <bookDir> list --status ready-for-review`（或 `approved` / `audit-failed` 等） |
 | "把第 N 章标记为 approved / 已发布" | `python scripts/chapter_index.py --book <bookDir> set-status --chapter N --status approved`（或 `published` / `rejected`） |
+| "回滚到第 N 章那一刻 / 真理文件写脏了" | `python scripts/snapshot_state.py --book <bookDir> restore --chapter N [--dry-run]`（先 `list` / `diff`；snapshot 由 step 11.0a 自动产，详见 [state-snapshots.md](references/state-snapshots.md)） |
+| "看下上章审计还有什么没改干净 / drift" | `python scripts/audit_drift.py --book <bookDir> read --json`（drift 由 step 11.0b 自动写，下章 Planner 自动读；详见 [audit-drift.md](references/audit-drift.md)） |
+| "看下伏笔账兑现了没 / commitment ledger" | `python scripts/commitment_ledger.py --memo <chapter_memo.md> --draft <draft.md>`（audit 之前自动跑）|
+| "卷尾兑现率 / cross-volume payoff" | `python scripts/hook_governance.py --book <bookDir> --command volume-payoff --volume N` |
+| "看 audit 改了几轮 / stagnation" | `python scripts/audit_round_log.py --book <bookDir> --chapter N --analyze` |
 | "压缩前面卷 / consolidate / 摘要太多了 / 历史压缩一下" | 先跑 `python scripts/consolidate_check.py --book <bookDir>` 看是否该压；该压则进 [phase 12 consolidator](references/phases/12-consolidator.md) |
 | "列出我所有书 / book list" | `python scripts/book.py list` |
 | "看下《XX》详情 / book show" | `python scripts/book.py show <bookId>` |
@@ -244,15 +249,21 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── state-projections.md     真理文件压缩视图
 │   ├── narrative-control.md     文本上游清洗（实体剥离 + zh/en 软化）
 │   ├── writing-methodology.md   通用写作方法论（6 节，可注入 Writer prompt）
-│   └── schemas/                 4 个数据形状
+│   ├── state-snapshots.md       每章真理文件全量快照（snapshots/<N>/）
+│   ├── audit-drift.md           上章审计未达标问题持久化（喂下章 Planner）
+│   └── schemas/                 5 个数据形状（含 chapter-index, audit-result 含轮 artifact）
 ├── templates/
 │   ├── inkos.json + book.json   元数据种子
 │   ├── story/{*.md, state/*.json}  真理文件种子
 │   └── genres/                  15 题材 profile（init 时按 --genre 选用）
-├── scripts/                     29 个 Python 脚本
+├── scripts/                     33 个 Python 脚本
 │   ├── init_book.py             创建 books/<id>/ 子树
 │   ├── book.py                  多书 CRUD（list / show / rename / delete / copy；删除默认归档）
 │   ├── chapter_index.py         章节运营索引（add/update/set-status/list/get/validate；orchestration step 11 自动写）
+│   ├── snapshot_state.py        每章真理文件快照 + 回滚（create/list/show/restore/diff/prune；step 11.0a 自动跑）
+│   ├── audit_drift.py           上章 audit 未达标 issues 持久化（喂下章 Planner；step 11.0b 自动跑）
+│   ├── audit_round_log.py       audit-revise 每轮 artifact（step 7 每轮自动跑；--analyze 检测停滞）
+│   ├── commitment_ledger.py     hook 账兑现校验（audit 前 step 7a 自动跑）
 │   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook 仲裁 + governance）
 │   ├── settler_parse.py         Settler 输出独立 parser（debug 用）
 │   ├── hook_governance.py       promote-pass / stale-scan / validate / health-report

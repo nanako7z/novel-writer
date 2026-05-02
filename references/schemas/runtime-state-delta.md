@@ -246,6 +246,7 @@ truth files updated
 | `halfLifeChapters` | int > 0 | 否 | Phase 7：建议半衰期章数 |
 | `advancedCount` | int ≥ 0 | 否 | Phase 7：累计推进次数 |
 | `promoted` | bool | 否 | Phase 7 hotfix 2：升级标志，由 architect-seed / consolidator 写入 |
+| `committedToChapter` | int ≥ 1 | 否 | 章节级 forward-looking 承诺：planner / architect 显式声明本钩子最迟必须在第 N 章兑现。比 `payoffTiming` 的 4 档枚举更精确——后者只能给"slow-burn / mid-arc"等粗粒度档位。缺省 → 退回 `payoffTiming` 启发式。`scripts/commitment_ledger.py` 与 `scripts/hook_governance.py --command volume-payoff` 都读这个字段；committed-but-not-paid by chapter N → critical 闸门。设置入口：`hook_governance.py --book BK commit-payoff --hook-id H001 --chapter 47`（同义旧名 `committedPayoffChapter` 也兼容读，新写一律落 `committedToChapter`）。 |
 
 ---
 

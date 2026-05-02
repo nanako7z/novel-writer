@@ -165,3 +165,140 @@ Reviser 根据 issues 数组选择修改模式（详见 `references/phases/10-re
 - 混合 → `auto`（让 Claude 自决）
 
 issues 中每条的 `suggestion` 字段是 reviser 的直接输入，必须填写可执行的具体改法（不是"再润色一下"这种空话）。
+
+---
+
+## 10. audit-r{i} 单轮 artifact
+
+audit-revise 闭环每一轮（含 round 0 初评）都被 orchestration 落到：
+
+```
+books/<id>/story/runtime/chapter-{NNNN}.audit-r{i}.json
+```
+
+`i` 是 0-based 轮序号（与 orchestration 的 `iter` 变量同步）：
+
+- `audit-r0.json` —— 初评（normalize 后的第一次 audit，未经过任何 reviser）
+- `audit-r1.json` —— reviser 第 1 轮跑完后的复审
+- `audit-r2.json` —— reviser 第 2 轮跑完后的复审（若到此还未 pass，闭环停在这里
+  或更早，由 EPSILON 早退）
+
+写盘 / 读取 / 跨轮分析的工具是 [`scripts/audit_round_log.py`](../../scripts/audit_round_log.py)。
+
+### 10.1 文件 schema
+
+```json
+{
+  "chapter": 12,
+  "round": 0,
+  "timestamp": "2026-05-02T10:11:12.345Z",
+  "audit": {
+    "overall_score": 78,
+    "passed": false,
+    "issues": [
+      {
+        "dim": 9,
+        "severity": "critical",
+        "category": "POV violation",
+        "description": "第二节在主角 POV 中插入了配角内心独白",
+        "evidence": "...原文片段..."
+      }
+    ]
+  },
+  "deterministic_gates": {
+    "ai_tells":          { "critical": 0, "warning": 2 },
+    "sensitive":         { "blocked": false },
+    "post_write":        { "critical": 0, "warning": 1 },
+    "fatigue":           { "critical": 0, "warning": 0 },
+    "commitment_ledger": { "violations": 0 }
+  },
+  "reviser_action": {
+    "mode": "polish",
+    "target_issues": ["dim-9", "dim-25"],
+    "outcome": "applied"
+  },
+  "delta": {
+    "score_change": 5,
+    "issues_resolved":   ["上一轮某 issue 的 description"],
+    "issues_introduced": ["本轮新出现的 issue 的 description"]
+  }
+}
+```
+
+### 10.2 字段语义
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `chapter` | int | 章节号 (>=1) |
+| `round` | int | 0-based 轮序号 |
+| `timestamp` | ISO8601 string | 写盘时间（UTC） |
+| `audit.overall_score` | int 0-100 | 本轮 LLM 评分（与 §1 一致） |
+| `audit.passed` | bool | 本轮是否通过（与 §5 pass 规则一致） |
+| `audit.issues` | array<Issue> | 本轮 issues（结构与 §3 一致；可额外携带 `dim` / `evidence` 字段） |
+| `deterministic_gates` | object | ai_tells / sensitive / post_write / fatigue / commitment_ledger 五道确定性闸门的 critical/warning 计数 |
+| `reviser_action.mode` | enum / null | 本轮 reviser 选用的模式（passed=true 时 null） |
+| `reviser_action.target_issues` | array<string> | reviser 本轮明确瞄准的 issue id / dim |
+| `reviser_action.outcome` | `"applied"` \| `"skipped"` | passed=true → skipped；其它情况 applied |
+| `delta.score_change` | int | 本轮 score - 上一轮 score（round 0 = 0） |
+| `delta.issues_resolved` | array<string> | 上一轮在、本轮不在的 issue description 集合 |
+| `delta.issues_introduced` | array<string> | 上一轮不在、本轮新出现的 issue description 集合 |
+
+`delta` 三字段由 `audit_round_log.py --write` 自动计算（读 `audit-r{i-1}.json`
+做 set diff），调用方传入的 `delta` 会被覆盖——单一真相来源。
+
+### 10.3 跨轮分析（`--analyze` 输出）
+
+```json
+{
+  "ok": true,
+  "chapter": 12,
+  "totalRounds": 3,
+  "scoreProgression": [62, 71, 78],
+  "stagnationDetected": false,
+  "recurringIssues": [
+    {
+      "description": "节奏拖",
+      "category": "节奏检查",
+      "severity": "critical",
+      "appearedInRounds": [0, 1, 2],
+      "roundsCount": 3
+    }
+  ],
+  "summary": "3 round(s); score 62 -> 78 (delta +16); 1 recurring issue(s)"
+}
+```
+
+- `recurringIssues`：同一 description 在 ≥ 2 个 round 出现的 issue。Reviser 看
+  到的 critical 是"上一轮已试但没解决"——必须升级 mode（见
+  [10-reviser.md §防呆](../phases/10-reviser.md#防呆避免轮间漏看per-round-artifact-契约)）。
+- `stagnationDetected`：存在 `severity=critical` 的 recurringIssue 且其
+  `appearedInRounds` 包含**连续两个**轮序号（如 `[0,1]` 或 `[1,2]`）→ orchestration
+  step 7c.1 自动把 reviser mode 升一级。
+
+### 10.4 CLI 速查
+
+```bash
+# 写一轮（payload JSON 文件路径用 --write 传）
+python scripts/audit_round_log.py --book <bookDir> --chapter N --round i \
+    --write /tmp/round-i.json
+
+# 列所有轮
+python scripts/audit_round_log.py --book <bookDir> --chapter N --list [--json]
+
+# 读某一轮
+python scripts/audit_round_log.py --book <bookDir> --chapter N --read --round i
+
+# 跨轮分析
+python scripts/audit_round_log.py --book <bookDir> --chapter N --analyze
+
+# 清空（章节大改/外科级 rework 后重启 audit-revise 时用）
+python scripts/audit_round_log.py --book <bookDir> --chapter N --clear
+```
+
+### 10.5 与既有字段的关系
+
+audit-r 文件里的 `audit` 子对象**就是** §1 的 AuditResult JSON——同一份内容，外加
+轮号、确定性闸门快照、reviser 动作、跨轮 delta 这四个 audit-revise 闭环专用维度。
+落 `story/state/audit_log/<NNNN>.json`（§9 提到的最终 snapshot）时，挑 `passed=true`
+或最后一轮 audit-r 中 `score` 最高者复制过去；audit-r 系列保留在 runtime/ 作为
+回溯证据。

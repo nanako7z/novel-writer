@@ -33,6 +33,17 @@ Auditor 进入时必须能读到下列文件 / 上下文：
   - `scripts/ai_tell_scan.py` → 单章 AI 味 issue 列表
   - `scripts/fatigue_scan.py` → 跨章长跨度疲劳 issue 列表（本章前 N 章窗口扫描，详见 [references/long-span-fatigue.md](../long-span-fatigue.md)）
   - `scripts/sensitive_scan.py` → 三级敏感词命中
+  - `scripts/commitment_ledger.py` → planner 在 `## 本章 hook 账` 段声明的 advance/resolve 是否在 draft 中真的兑现。critical violation（类别 `hook 账未兑现` / `committedToChapter 未兑现`）作为 **load-bearing** 输入合并进 audit issues——不是 advisory，reviser 必须在下一轮把缺失的落地动作补回正文。详见 [references/hook-governance.md §8c](../hook-governance.md#8c-章节-hook-账commitment-ledger)。标准调用：
+
+    ```bash
+    python {SKILL_ROOT}/scripts/commitment_ledger.py \
+      --memo story/runtime/chapter_memo.md \
+      --draft story/runtime/chapter-{NNNN}.draft.md \
+      --hooks <bookDir>/story/state/hooks.json \
+      --chapter <chapterNumber>
+    ```
+
+    在 deterministic gate 链中位置：`sensitive_scan` 之后、LLM auditor 之前。命中 critical 不阻断本章主循环（reviser 会补救），但若 audit-revise 三轮后仍命中 critical → 章节标 `audit-failed-best-effort` 并把对应 issue 完整写进 chapters/index.json。
   - `scripts/word_count.py` → 章节字数 vs `LengthSpec`（target / softMin / softMax / hardMin / hardMax）
 
 跑 `fatigue_scan.py` 的标准调用：
@@ -152,6 +163,32 @@ inkos 在 `chapter-review-cycle.ts` L33-35 与 L202-203 中硬编码：
 4. 无 block 级敏感词（`sensitive_scan.py` severity=block 命中数 == 0）—— 这条会强制把 `passed` 拉成 false。
 
 注：AI 味 issue 与 post-write check（章节引用、段落形状等）也合并进 `auditResult.issues`，作为 reviser 的输入；但只有 `severity=critical` 的 post-write issue 才会强制 fail。
+
+### 4.1 Per-round artifact（i > 0 时必读）
+
+audit-revise 闭环每一轮（含 round 0 初评）都会被 orchestration 落到
+`story/runtime/chapter-{NNNN}.audit-r{i}.json`（schema 见
+[references/schemas/audit-result.md §10](../schemas/audit-result.md#10-audit-r-单轮-artifact)，写盘工具
+`scripts/audit_round_log.py`）。
+
+**进入 round i (i > 0) 的 Auditor 必须**：
+
+1. 读 `chapter-{NNNN}.audit-r{i-1}.json`，拿到上一轮报过的 `audit.issues`
+   清单（特别是 `severity=critical` 的那些）；
+2. 在评估当前 draft 时，对每条上一轮的 critical issue 单独判断"还在不在"——
+   - **仍在**：把它原样合并进本轮 `issues` 数组，并保留为 `severity=critical`，
+     额外在 `description` 末尾追加 `（上一轮已报，未修复）` 标记；
+   - **已消失**：不再报，但本轮 `summary` 里要点名"上一轮 N 条 critical
+     已 K 条修掉"；
+   - **变形（同语义不同表述）**：合并到现有条目并追加 `（同原 critical 重述）`，
+     不要拆成新条。
+
+这条契约保证：当 reviser 在 round i 改完后没真正解决某个 critical，本轮 Auditor
+不会"忘了" round i-1 的判定，从而给出错误的高分。orchestration 的 stagnation
+detection（连续 2+ 轮同一 critical）由此命中，下一轮 reviser 会被升级模式
+（polish → rewrite → rework）。
+
+`audit-r{i-1}.json` 缺失（首轮、或被 `--clear` 过）→ 跳过本节，按普通初评做。
 
 ### 5. Audit-revise 闭环
 

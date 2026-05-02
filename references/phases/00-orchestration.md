@@ -121,42 +121,113 @@ function writeNextChapter(book):
         draft = runNormalizer(draft, lengthSpec)  # 单次修正，max 2 passes
     # 落盘：story/runtime/chapter-{NNNN}.normalized.md
 
-    # ── 7. Audit-Revise 回环（max 3 轮）─────────────────────────
+    # ── 7. Audit-Revise 回环（max 3 轮 + per-round artifact 持久化）───
     # references/phases/09-auditor.md + 10-reviser.md
-    iter = 0
-    lastScore = 0
-    EPSILON = 3              # 增益 < 3 即退出
-    PASS = 85                # 分数线
+    # 每轮的 audit + 确定性闸门 + reviser 动作都落到
+    #   story/runtime/chapter-{NNNN}.audit-r{i}.json
+    # 让下一轮 Auditor / Reviser 不依赖 Claude 工作记忆——schema 见
+    # references/schemas/audit-result.md §10、tool 见 audit_round_log.py。
+    iter = 0                       # 0-based round index（与 audit-r{i} 对齐）
+    lastScore = -1
+    EPSILON = 3                    # 增益 < 3 即退出
+    PASS = 85                      # 分数线
     MAX_ITER = 3
     while iter < MAX_ITER:
+        # 7.0 进入 i > 0 时先做跨轮分析：检测 stagnation（同一 critical
+        #     issue 连续 2 轮没被修掉 → 说明上一轮 reviser 力度不够，
+        #     下面 step 7c 选 mode 时强制升级）
+        stagnation = false
+        recurringIssues = []
+        if iter > 0:
+            ana = scripts/audit_round_log.py --book <bookDir> \
+                    --chapter chapterNo --analyze
+            stagnation = ana.stagnationDetected
+            recurringIssues = ana.recurringIssues  # 喂回 Reviser
+
         # 7a. 确定性闸门
         aiTells   = scripts/ai_tell_scan.py --file draft
         sensitive = scripts/sensitive_scan.py --file draft
+        # commitment_ledger 校验 planner 在 `## 本章 hook 账` 段声明的
+        # advance/resolve 是否在 draft 中真的兑现（详见 references/
+        # hook-governance.md §8c）。critical violation 是 load-bearing——
+        # 进 allIssues 与 audit issues 一起喂给 reviser。
+        commitLedger = scripts/commitment_ledger.py \
+                          --memo story/runtime/chapter_memo.md \
+                          --draft draft \
+                          --hooks <bookDir>/story/state/hooks.json \
+                          --chapter chapterNo
+        # （post_write_validate 已在 step 5c 跑过；fatigue 在 Auditor 里
+        #   或本步并入。把它们最近一次结果汇总到 detGates。）
+        detGates = {
+            ai_tells:          {critical: …, warning: …},
+            sensitive:         {blocked: sensitive.blocked},
+            post_write:        {critical: pwv.criticalCount, warning: pwv.warningCount},
+            fatigue:           {critical: …, warning: …},
+            commitment_ledger: {violations: commitLedger.violations},
+        }
 
-        # 7b. 语义审计
-        audit = runAuditor(draft, contextPkg, fanficMode if any)
+        # 7b. 语义审计——i > 0 时 Auditor 必须读 audit-r{i-1}.json，
+        #     才能判断"上一轮该修掉的 issue 是否仍在"，参见 09-auditor.md。
+        audit = runAuditor(draft, contextPkg, fanficMode if any,
+                           previousRound = read audit-r{iter-1}.json if iter > 0)
 
-        allIssues = audit.issues + aiTells.issues + sensitive.issues_warn_or_block
+        allIssues = audit.issues + aiTells.issues + sensitive.issues_warn_or_block \
+                  + commitLedger.violations  # critical = "hook 账未兑现" / "committedToChapter 未兑现"
 
         passed = (audit.overall_score >= PASS
                   and count.status == "in-soft"
                   and sensitive.blocked == False
                   and no critical in allIssues)
 
+        # 7c. 修订（仅 fail 时才进；passed 时本轮 reviser_action.outcome=skipped）
+        reviserAction = {mode: null, target_issues: [], outcome: "skipped"}
+        if not passed:
+            mode = chooseReviseMode(allIssues)  # 见 10-reviser.md
+            # 7c.1 stagnation escalation：同一 critical issue 连续 2 轮没修掉
+            #      → 强制升级 mode（polish → rewrite，rewrite → rework；
+            #         rework / anti-detect / spot-fix 不再升级）。
+            if stagnation:
+                escalation = {"polish": "rewrite", "rewrite": "rework"}
+                if mode in escalation:
+                    log "audit-r{iter}: stagnation, escalating "
+                        "{mode} → {escalation[mode]}"
+                    mode = escalation[mode]
+            # 7c.2 Reviser 必须看过 previousRounds + recurringIssues。
+            previousRounds = scripts/audit_round_log.py --book <bookDir> \
+                                --chapter chapterNo --list --json
+            draft = runReviser(draft, allIssues, mode,
+                               previousRounds = previousRounds.rounds,
+                               recurringIssues = recurringIssues)
+            reviserAction = {
+                mode: mode,
+                target_issues: [extract ids/dims this round targets],
+                outcome: "applied",
+            }
+            # 7d. 修订后若长度漂移，再单次 normalize
+            if length 漂出 soft range:
+                draft = runNormalizer(draft, lengthSpec)
+
+        # 7e. 持久化本轮 artifact（在决定是否再下一轮之前必落盘）
+        roundJson = {
+            chapter: chapterNo, round: iter, timestamp: nowIso(),
+            audit:                {overall_score: audit.overall_score,
+                                   passed:        audit.passed,
+                                   issues:        audit.issues},
+            deterministic_gates:  detGates,
+            reviser_action:       reviserAction,
+        }
+        write /tmp/round-{iter}.json = roundJson
+        scripts/audit_round_log.py --book <bookDir> --chapter chapterNo \
+            --round iter --write /tmp/round-{iter}.json
+        # 脚本会自动读 audit-r{iter-1}.json 计算 delta
+        # （score_change / issues_resolved / issues_introduced）。
+
         if passed:
             break
 
-        # 7c. 修订
-        mode = chooseReviseMode(allIssues)   # 见 references/phases/10-reviser.md
-        draft = runReviser(draft, allIssues, mode)
-
-        # 7d. 修订后若长度漂移，再单次 normalize
-        if length 漂出 soft range:
-            draft = runNormalizer(draft, lengthSpec)
-
-        # 7e. 增益检查
+        # 7f. 增益检查
         improvement = audit.overall_score - lastScore
-        if improvement < EPSILON:
+        if iter > 0 and improvement < EPSILON:
             break          # 收益递减即退出，不再死磕
         lastScore = audit.overall_score
         iter += 1
@@ -233,6 +304,38 @@ function writeNextChapter(book):
         [--review-note "polish-reverted-introduced-issues" if applicable]
     # 退出码非 0 即视为索引写入失败——记 warning 但不 abort（章节正文已落盘）。
 
+    # ── 11.0a 状态快照（State snapshot；rollback 安全网）──────
+    # references/state-snapshots.md
+    # 在章节正文 + chapters/index.json 都已落盘后，把当时的 7 个 md 真理文件
+    # + 4 个 state JSON 备份到 story/snapshots/{NNNN}/。后续如果某章把真理状态
+    # 写脏了（hook 推升出错、character_matrix 误覆盖、consolidate 漏归档），
+    # 可以 restore 回这一章那一刻。
+    #   python scripts/snapshot_state.py --book <bookDir> create --chapter chapterNo
+    # 失败处理：**非 fatal**——记 warning 但不 abort。snapshot 是兜底安全网，
+    # 不是 load-bearing 阶段；章节正文已经落盘，下一章照常写。
+    # （consolidator 启动前应单独跑一次 `create --milestone`，这是 phase 12 的责任。）
+
+    # ── 11.0b 审计纠偏喂料（audit drift → 下章 Planner）────────
+    # references/audit-drift.md
+    # 把本章 audit-revise 最后一轮（即落盘版本对应的那一轮）残留的
+    # critical / warning issue 持久化成 story/audit_drift.md，下一章
+    # Planner 在 phase 02 step 1a 之后必须读它，把每条都映射进
+    # chapter_memo 的"## 不要做" / "## 该兑现的"。issues 列表为空
+    # → 删除 story/audit_drift.md（无 drift），不留陈旧内容。
+    # info severity 一律丢弃；脚本自动顺手 sanitize current_state.md
+    # 里残留的 "## 审计纠偏" 块（老 pipeline 内嵌习惯，向后兼容）。
+    finalAuditIssues = audit.issues   # 来自 step 7 最后一轮 audit；
+                                       # 形如 [{severity, category, description}, ...]
+    write story/runtime/chapter-{NNNN}.audit-final-issues.json = finalAuditIssues
+    # 注意 issues.json 是**顶层 JSON 数组**（不是包对象），脚本 _validate_issues 期望 list。
+    python scripts/audit_drift.py --book <bookDir> write \
+        --chapter chapterNo \
+        --issues story/runtime/chapter-{NNNN}.audit-final-issues.json \
+        [--lang en if book.language == "en"]
+    # 失败处理：非 fatal——记 warning 但不 abort。drift 是写给下章
+    # Planner 看的"建议性记录"，本章正文已落盘；下次写章 Planner
+    # 没读到 drift 也只是少了一条避坑提示，不会污染真理状态。
+
     # ── 11.05 Chapter Analyzer (post-persist 定性回顾) ─────────
     # references/phases/13-analyzer.md
     # 章节正文 + 真理文件全部定稿后，跑一次单向只读的定性回顾。
@@ -253,6 +356,31 @@ function writeNextChapter(book):
     # 失败处理：解析失败重试 ≤ 2，仍失败写 stub（warning="analyzer-failed"），
     #           不阻断主循环——Analyzer 是信息性的，不是 load-bearing。
     # 关键不变量：Analyzer 单向只读，绝不修改 chapters/* 或 story/state/*。
+
+    # ── 11.2 卷尾 cross-volume payoff 验证 ──────────────────────
+    # references/hook-governance.md §8d
+    # 仅当本章是某卷的最后一章（chapterNo == volume.endCh）时触发一次。
+    # 读 story/outline/volume_map.md（fallback volume_outline.md）找到
+    # 当前 volumeNumber，跑：
+    #   python scripts/hook_governance.py --book <bookDir> \
+    #          --command volume-payoff --volume <volumeNumber>
+    # 输出含 hooksOpenedInVolume / hooksResolvedByEnd / payoffRate / issues。
+    #
+    # critical issue（committedToChapter 破产 / coreHook 卷尾未兑现）→
+    # **不阻断**本章落盘（章节正文已经过 audit + apply_delta 闸门）；改为
+    # 把概要写到 chapters/index.json 第 chapterNo 行的 reviewNote 字段，
+    # 提示作者本卷尾欠账，下卷 Planner 必须先把这些 hook 圈进 advance/
+    # resolve（或显式 commit-payoff 到下卷某章）。
+    #
+    # 没有 volume_map → 脚本返回 ok=true + warning，graceful 跳过。
+    # 不在卷尾 → 整步跳过。
+    isVolumeFinale = (volume_map 解析得到的 endCh == chapterNo)
+    if isVolumeFinale:
+        vp = scripts/hook_governance.py --command volume-payoff \
+                --book <bookDir> --volume volumeNumber
+        if vp.issues 含 critical:
+            chapter_index.py set-status --chapter chapterNo \
+              --review-note "volume-payoff: <vp.summary>"
 
     # ── 11.1 (可选) Consolidate 自动建议 —— 不擅自跑 ──────────
     # references/phases/12-consolidator.md

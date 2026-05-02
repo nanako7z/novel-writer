@@ -20,6 +20,7 @@ Claude 在这一阶段需要读：
 - 如果 chapterNumber ≤ 3，需要触发"黄金三章"指引段
 - 上一章正文文件（取最后一屏作为 `previous_chapter_ending_excerpt`）
 - **上章 Analyzer 反馈**：`story/runtime/chapter-{N-1}.analysis.json`（如存在）——由 [phase 13 Chapter Analyzer](13-analyzer.md) 在上章落盘后产出的定性回顾，包含 `warningsForNextChapter`、`fatigueSignals` 等下章 Planner 必须消费的硬信号
+- **上章 audit 纠偏**：`story/audit_drift.md`（如存在）——由主循环 step 11.0b 用 [`scripts/audit_drift.py`](../audit-drift.md) 把上章 audit 残留的 critical/warning issue 持久化下来，下章 Planner 必须正面回应（详见下文"上章 audit 纠偏"小节）
 
 ## 上章 Analyzer 的反馈（载入与消费）
 
@@ -45,6 +46,37 @@ Claude 在这一阶段需要读：
 - 兑现型 warning → `## 该兑现的 / 暂不掀的`
 - hook 推进型 warning → `## 本章 hook 账`（advance / resolve）
 - 避坑型 warning + fatigueSignals → `## 不要做`
+
+## 上章 audit 纠偏（载入 `story/audit_drift.md`）
+
+主循环 step 11.0b 里 [`scripts/audit_drift.py`](../audit-drift.md) 把上章最后一轮 audit 的 critical / warning issue 落到 `story/audit_drift.md`，本阶段 Planner **必须**先尝试读它（如 `currentChapter > 1`），与 Analyzer 反馈并列消费——但语义不同：
+
+- **Analyzer 反馈**：定性回顾、节奏建议、疲劳信号（"上章这个爽点用过了"）；
+- **audit drift**：上章审计**没改干净**的硬问题（"逻辑闭环缺角"、"主角动机自相矛盾"），下章必须**正面避开或修复**。
+
+**消费规则**：
+
+1. **读取**：尝试 `python scripts/audit_drift.py --book <bookDir> read --json`。
+   - `exists: false` → 上章 audit 干净通过，没东西要管，跳过。
+   - `exists: true` → `issues` 是 `[{severity, category, description}, ...]` 数组，按下表分流。
+2. **issue → memo 映射**：
+
+   | issue.category 例子 | severity | 进 chapter_memo 哪一段 |
+   |---|---|---|
+   | `逻辑闭环` / `因果链` / `动机不通` | critical | `## 不要做` 写一条"本章必须修复：上章 X 留下的因果断点"；同时若涉及具体 hook，进 `## 本章 hook 账` advance |
+   | `人设崩坏` / `角色行为反差` | critical | `## 不要做` "本章不要再让 X 表现 Y——上章已被 audit 标为崩人设" |
+   | `节奏拖沓` / `信息倾倒` | warning | `## 当前任务` 与 `## 章尾必须发生的改变` 必须给出具体动作 / 决策；`## 日常/过渡承担什么任务` 收紧 |
+   | `重复套路` / `近 N 章雷同` | warning | `## 不要做` "本章避免重复上章 X 的桥段" |
+   | 其它 warning | warning | 一律进 `## 不要做`，原文照搬 description |
+
+3. **不要忽略 critical**：`severity === "critical"` 的 audit drift issue 必须在 memo 里有显式正面回应（不是单一一句"避免 X"——要给 Writer 具体的替代动作）。
+4. **drift 是建议性的**：与真理文件不同，drift 不强制保留——下章 Planner 消费完之后由 step 11.0b 在**新一轮** audit 后**整体重写或清空**（不用 Planner 自己删）。Planner 只读不删。
+5. **drift 与 Analyzer 反馈冲突**：若两边互相挤压（drift 要求修 critical、Analyzer 要求兑现 hook、本章字数不够），按"上章 Analyzer 的反馈" §5 同样的"上报用户决策"流程处理——不要自己悄悄丢。
+
+**写入位置（合并 cheat sheet）**：
+- audit drift critical → 优先 `## 不要做` + `## 本章 hook 账`（如涉及 hook）
+- audit drift warning → `## 不要做` + 影响 `## 当前任务` 表述
+- 与 Analyzer 反馈合流——同一段里两边的输入都列上，避免"先按 Analyzer 写完又被 drift 推翻"。
 
 ## Process
 
@@ -153,6 +185,7 @@ defer:
 
 1. **采集材料**。按 Inputs 顺序读文件；不存在的文件一律视作空（不要伪造内容）。
 1a. **载入上章 Analyzer 反馈**（仅当 `chapterNumber > 1`）：尝试读 `story/runtime/chapter-{N-1}.analysis.json`，按上节"上章 Analyzer 的反馈"规则分流到 hook 账 / 该兑现的 / 不要做 三栏的输入材料中。文件缺失或 `warning === "analyzer-failed"` 即跳过，不阻断。
+1a'. **载入上章 audit 纠偏**（仅当 `chapterNumber > 1`）：跑 `python {SKILL_ROOT}/scripts/audit_drift.py --book <bookDir> read --json`；若 `exists: true` 则按上节"上章 audit 纠偏"规则把每条 issue 分流到对应 memo 段（critical 要正面回应、warning 进 `## 不要做`）。drift 不存在或脚本失败即跳过，不阻断。
 1b. **跑 cadence_check**（每章必跑，提早一步看节奏压力）：
 
   ```bash
@@ -177,6 +210,34 @@ defer:
 4. **拼装用户消息**。按 inkos `PLANNER_MEMO_USER_TEMPLATE` 的 7 段结构填模板：brief_block / 上一章最后一屏 / 最近 3 章摘要 / 当前 arc / 主角行 / 对手行 / 协作者行 / 相关 thread / 必须回收的陈旧 hook / 卷外约束。
 5. **生成 memo**：在心中扮演系统 prompt 的角色，输出 YAML frontmatter + markdown body。**不要包代码块标记**，不要把 markdown 字符串塞进 JSON。
 6. **解析校验**（参 inkos `parseMemo`）：必须能解析出 `chapter / goal / isGoldenOpening / threadRefs` 四个 frontmatter 字段，且 7 个 ## 二级标题全部出现且非空。
+
+#### 本章 hook 账（must-write）
+
+`## 本章 hook 账` 段是 **load-bearing**——它不是装饰性结构，是下游 [phase 09 auditor](09-auditor.md) 的 pre-audit 确定性闸门 `scripts/commitment_ledger.py` 的输入契约（详见 [references/hook-governance.md §8c](../hook-governance.md#8c-章节-hook-账commitment-ledger)）。Planner 必须按四个 subsection 严格输出，且每条 advance / resolve 都要写出**正文里能被 Writer 真的兑现**的具体动作，不能只填 hookId。
+
+**必填四段**（每段下用 `- ` 列表；空段用 `- 无` 占位，不要省）：
+
+```markdown
+## 本章 hook 账
+
+### advance:
+- H001 "黑袍人身份线索" → 给出第二条线索（揭示鞋纹）
+
+### resolve:
+- H007 "断剑之约" → 主角归还断剑，老剑师当面接下
+
+### defer:
+- H012 "师妹的承诺" → 本卷不动，理由：等第 18 章独立场景
+
+### open:
+- (新种伏笔写在 newHookCandidates，本段写 "- 无"；新开钩子 ≤ 2 个)
+```
+
+**为什么 advance / resolve 必须写 descriptor**：commitment_ledger 抽两类 keyword 验证 draft——优先双引号内的钩子名（`"黑袍人身份线索"`），其次 `→` 之前的描述。如果 planner 只写 `- H001 → 处理一下`，validator 没东西可比，校验直接失效。
+
+**对应章节级承诺（committedToChapter）**：如果某条 hook 的 `committedToChapter` 字段 == 本章号（由 `hook_governance.py commit-payoff` 之前写入），它**必须**进 advance 或 resolve，**不能 defer**——否则下游 `commitment_ledger.py --hooks ... --chapter N` 会报 critical（类别 `committedToChapter 未兑现`）。Planner 在步骤 2 筛 stale hooks 时顺手把这类"due this chapter"的 hook 也圈出来。便捷查询：`hook_governance.py --book BK due-this-chapter`。
+
+**校验回路**：本段写得不规范 → commitment_ledger 解析空 → audit 拿不到伏笔信号 → reviser 不会自动补回正文。所以这段是"planner 一笔之差，整章后续闸门都失效"。务必按格式严格写。
 
 #### 黄金三章指引（chapter ≤ 3 时附加）
 

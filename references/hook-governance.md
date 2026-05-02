@@ -218,6 +218,78 @@ python {SKILL_ROOT}/scripts/hook_arbitrate.py \
 
 ---
 
+## 8c. 章节 hook 账（commitment ledger）
+
+每一章 Planner 必须在 chapter_memo 末尾写一个 `## 本章 hook 账` 段，按四个 subsection 列出本章对活跃伏笔的动作（详见 [phase 02 planner](phases/02-planner.md#本章-hook-账must-write)）。Writer 拿到 memo 后，正文里必须真的"做掉"declared 的 advance / resolve——否则 planner 与 writer 之间就形成了"承诺/兑现失配"。
+
+**确定性闸门**：`scripts/commitment_ledger.py`（端口自 inkos `utils/hook-ledger-validator.ts`）。
+
+```bash
+python {SKILL_ROOT}/scripts/commitment_ledger.py \
+  --memo story/runtime/chapter_memo.md \
+  --draft story/runtime/chapter-{NNNN}.draft.md \
+  [--hooks story/state/hooks.json --chapter N] \
+  [--json] [--strict-empty]
+```
+
+**判定规则**：
+
+1. 解析 `## 本章 hook 账` / `## Hook ledger for this chapter` 段，按 4 个 subsection（open / advance / resolve / defer）拆 entry。
+2. 对每条 `advance` / `resolve` entry：
+   - 优先取双引号内的钩子名（最具信息量），其次取 `→` / `->` 之前的描述。
+   - 抽 token：2+ 字 CJK 序列 + 3+ 字母 ASCII 词（小写、去 stopwords）；4+ 字 CJK 还会拆首尾 2-gram 让部分回声也算数。
+   - 在 draft 里查任一 token——只要命中一个就算"作者写到了"。**不要求** draft 重复 `H001` 这种纯 ID。
+3. 占位行（`无 / none / nil / null / 暂无 / n/a / na / tbd / todo / 待定`）忽略，不参与校验。
+4. `defer` / `open` 不校验——前者是"刻意不动"，后者是新种子（还没有可比对的 descriptor）。
+5. 任一 advance/resolve entry 在 draft 中无证据 → 输出 `severity=critical` 的 violation，类别 `hook 账未兑现`，给具体 hookId + 修复建议（"加入对 X 的具体落地动作，或把它移到 defer 并给出理由"）。
+6. **可选 stricter check**：如果传了 `--hooks` + `--chapter`，脚本还会扫 `hooks.json`：任何记录的 `committedToChapter`（或兼容 `committedPayoffChapter`）等于本章号，**且**未在 ledger 的 advance/resolve 里登记，**且**未 resolved → critical（类别 `committedToChapter 未兑现`）。这覆盖 planner 漏写的情况。
+
+**退出码**：0 = 无 critical；2 = 有 critical；3 = bad input（找不到文件 / `--strict-empty` 模式下 ledger 完全缺失）。
+
+**接入点**：[phase 09 auditor](phases/09-auditor.md) pre-audit 确定性闸门链中位于 `sensitive_scan` 之后、LLM auditor 之前。critical violation 合并进 `audit.issues`，作为 load-bearing 输入（不是 advisory）——reviser 必须在下一轮把缺失的落地动作补回正文。
+
+---
+
+## 8d. 卷尾兑现验证（cross-volume payoff）
+
+每完成一卷的最后一章，必须验证"这一卷里开的伏笔，在卷尾前都得到了交代"——要么 resolve，要么 defer 到下卷（带 `committedToChapter` 指向后续章节作为承诺），要么显式写 cross-volume slow-burn。否则就是**卷间叙事漏账**——读者会在下一卷开头发现一堆没人提的旧伏笔。
+
+**确定性闸门**：`scripts/hook_governance.py --command volume-payoff --volume N`（与已有的 `verify-volume-payoff` 是兄弟命令；前者按 gap #17 形式输出 `payoffRate / hooksOpenedInVolume / hooksResolvedByEnd / issues`，后者按 4-类分类输出）。
+
+```bash
+python {SKILL_ROOT}/scripts/hook_governance.py \
+  --book <bookDir> --command volume-payoff --volume 1 \
+  [--current-chapter N]
+```
+
+**算法**：
+
+1. 读 `story/outline/volume_map.md`（fallback `volume_outline.md`）找第 N 卷的 `[startCh, endCh]`。无 volume map → 返回 `ok=true` + warning，graceful 跳过。
+2. 圈出本卷 in-volume 的 hooks（`vstart ≤ startChapter ≤ vend`）中，满足任一：
+   - `payoffTiming ∈ {volume-end, mid-arc}`，或
+   - `committedToChapter ∈ [vstart, vend]`，或
+   - `coreHook=true`
+3. 对每条：
+   - status ∈ {resolved} 且 `lastAdvancedChapter ≤ vend` → ok（计入 `hooksResolvedByEnd`）。
+   - 有 `committedToChapter > vend` → ok（forward-committed，下一卷的事）。
+   - 有 `committedToChapter ∈ [vstart, vend]` 但未 resolved → **critical**（类别 `committed payoff missed`）——planner 自己许下的具体章节承诺破产。
+   - `coreHook=true` 且未 resolved → **critical**（类别 `core hook unresolved at volume end`）。
+   - 其余开着没收 → **warning**（类别 `hook opened but unresolved at volume end`）。
+4. `payoffRate = hooksResolvedByEnd / hooksOpenedInVolume`。
+
+**何时调**：[phase 00 orchestration](phases/00-orchestration.md) step 11.2——仅当本章是某卷的最后一章（`chapterNumber == volume.endCh`）时触发一次。critical issue 不阻断本章落盘（章节正文已经过 audit + apply_delta 闸门），但要回写到 chapters/index.json 的 `reviewNote` 提示作者：本卷尾还欠账，下卷 Planner 要先补完。
+
+**与 §8c 的分工**：
+
+| 子系统 | 时机 | 输入 | 输出粒度 |
+|---|---|---|---|
+| **commitment_ledger** | 本章 audit 之前 | chapter_memo + draft | 单章承诺 vs 单章正文 |
+| **volume-payoff** | 本卷最后一章落盘后 | volume_map + hooks.json | 整卷开过的伏笔 vs 卷尾状态 |
+
+两者都不会写真理文件——前者只是 issue 喂回 audit/reviser，后者只是回写 chapters/index.json 的 `reviewNote`。
+
+---
+
 ## 9. 与 Phase 7 / Phase 9 的关系
 
 - **Phase 7 (Settler)** 产 `hookOps.upsert`；只能引用现存 hookId，新候选写在 `newHookCandidates`。promote-pass 之后 seed 才会变成可被 upsert 的 hook。

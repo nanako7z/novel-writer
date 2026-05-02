@@ -2,11 +2,25 @@
 """Hook governance subsystem (Python port of inkos hook-* utils).
 
 Commands:
-  promote-pass   apply 4 promotion rules to seeds and write back to hooks.json
-  stale-scan     mark hooks stale based on per-type halfLifeChapters
-  validate       cross-file consistency: hooks.json vs pending_hooks.md vs
-                 chapter_summaries.json + depends_on cycles
-  health-report  per-hook freshness + ledger pressure metrics
+  promote-pass            apply 4 promotion rules to seeds and write back to hooks.json
+  stale-scan              mark hooks stale based on per-type halfLifeChapters
+  validate                cross-file consistency: hooks.json vs pending_hooks.md vs
+                          chapter_summaries.json + depends_on cycles
+  health-report           per-hook freshness + ledger pressure metrics
+
+  Commitment Ledger:
+  commit-payoff           write hook.committedPayoffChapter (idempotent, atomic)
+  uncommit-payoff         clear hook.committedPayoffChapter
+  due-this-chapter        list hooks whose committedPayoffChapter == N
+
+  Cross-Volume Payoff:
+  verify-volume-payoff    classify every hook planted in a volume as
+                          paid-off-this-volume / future-committed /
+                          unpaid-no-commitment / forgotten
+  volume-payoff           gap #17 form: report hooksOpenedInVolume /
+                          hooksResolvedByEnd / payoffRate + issues, with
+                          critical for committedToChapter misses or
+                          coreHook unresolved at volume end
 
 All commands print structured JSON to stdout.  Non-zero exit ONLY on hard
 errors (parser failure / IO / bad args).  Validation findings go in the
@@ -650,6 +664,492 @@ def cmd_health_report(book_dir: Path, current_chapter: int | None) -> dict:
     }
 
 
+# --------------------- commitment ledger commands --------------------------
+
+def _load_book_target_chapters(book_dir: Path) -> int | None:
+    """Try to read the planned book length from book.json (optional)."""
+    bp = book_dir / "book.json"
+    if not bp.exists():
+        return None
+    try:
+        obj = json.loads(bp.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    val = obj.get("targetChapters") or obj.get("target_chapters")
+    if isinstance(val, int) and val > 0:
+        return val
+    return None
+
+
+def _find_hook(hooks: list[dict], hook_id: str) -> dict | None:
+    for h in hooks:
+        if isinstance(h, dict) and h.get("hookId") == hook_id:
+            return h
+    return None
+
+
+def cmd_commit_payoff(book_dir: Path, hook_id: str | None, chapter: int | None,
+                     reason: str | None) -> dict:
+    if not hook_id:
+        hard_err("commit-payoff requires --hook-id")
+    if chapter is None:
+        hard_err("commit-payoff requires --chapter N")
+    if chapter < 1:
+        hard_err(f"commit-payoff: --chapter must be >= 1 (got {chapter})")
+
+    hooks_path = book_dir / "story" / "state" / "hooks.json"
+    hooks_obj = load_json(hooks_path, {"hooks": []})
+    if not isinstance(hooks_obj, dict):
+        hooks_obj = {"hooks": []}
+    hooks = list(hooks_obj.get("hooks", []) or [])
+
+    hook = _find_hook(hooks, hook_id)
+    if hook is None:
+        hard_err(f"commit-payoff: hook '{hook_id}' not found in hooks.json")
+
+    start_ch = int(hook.get("startChapter") or 0)
+    if chapter < start_ch:
+        hard_err(
+            f"commit-payoff: chapter {chapter} < hook.startChapter {start_ch} "
+            f"(can't commit a payoff before the hook is planted)"
+        )
+
+    target = _load_book_target_chapters(book_dir)
+    if target is not None and chapter > target:
+        hard_err(
+            f"commit-payoff: chapter {chapter} > book.targetChapters {target}"
+        )
+
+    prev = hook.get("committedPayoffChapter")
+    hook["committedPayoffChapter"] = int(chapter)
+    if reason:
+        hook["committedPayoffReason"] = reason
+
+    hooks_obj["hooks"] = hooks
+    atomic_write_json(hooks_path, hooks_obj)
+
+    return {
+        "ok": True,
+        "command": "commit-payoff",
+        "hookId": hook_id,
+        "previousCommitment": prev,
+        "committedPayoffChapter": int(chapter),
+        "reason": reason or "",
+        "idempotent": prev == int(chapter),
+    }
+
+
+def cmd_uncommit_payoff(book_dir: Path, hook_id: str | None) -> dict:
+    if not hook_id:
+        hard_err("uncommit-payoff requires --hook-id")
+
+    hooks_path = book_dir / "story" / "state" / "hooks.json"
+    hooks_obj = load_json(hooks_path, {"hooks": []})
+    if not isinstance(hooks_obj, dict):
+        hooks_obj = {"hooks": []}
+    hooks = list(hooks_obj.get("hooks", []) or [])
+
+    hook = _find_hook(hooks, hook_id)
+    if hook is None:
+        hard_err(f"uncommit-payoff: hook '{hook_id}' not found in hooks.json")
+
+    prev = hook.get("committedPayoffChapter")
+    if "committedPayoffChapter" in hook:
+        del hook["committedPayoffChapter"]
+    if "committedPayoffReason" in hook:
+        del hook["committedPayoffReason"]
+
+    hooks_obj["hooks"] = hooks
+    atomic_write_json(hooks_path, hooks_obj)
+
+    return {
+        "ok": True,
+        "command": "uncommit-payoff",
+        "hookId": hook_id,
+        "previousCommitment": prev,
+        "cleared": prev is not None,
+    }
+
+
+def cmd_due_this_chapter(book_dir: Path, current_chapter: int | None) -> dict:
+    if current_chapter is None:
+        manifest = load_json(book_dir / "story" / "state" / "manifest.json", {})
+        if isinstance(manifest, dict):
+            current_chapter = int(manifest.get("lastAppliedChapter", 0) or 0) + 1
+
+    if not isinstance(current_chapter, int) or current_chapter < 1:
+        hard_err(f"due-this-chapter: bad current chapter {current_chapter}")
+
+    hooks_obj = load_json(book_dir / "story" / "state" / "hooks.json",
+                          {"hooks": []})
+    if not isinstance(hooks_obj, dict):
+        hooks_obj = {"hooks": []}
+    hooks = list(hooks_obj.get("hooks", []) or [])
+
+    due: list[dict] = []
+    overdue: list[dict] = []
+    for h in hooks:
+        if not isinstance(h, dict):
+            continue
+        commit = h.get("committedPayoffChapter")
+        if not isinstance(commit, int):
+            continue
+        if is_resolved(h):
+            continue
+        info = {
+            "hookId": h.get("hookId"),
+            "type": h.get("type"),
+            "expectedPayoff": h.get("expectedPayoff"),
+            "notes": h.get("notes"),
+            "startChapter": int(h.get("startChapter") or 0),
+            "lastAdvancedChapter": int(h.get("lastAdvancedChapter") or 0),
+            "committedPayoffChapter": commit,
+            "committedPayoffReason": h.get("committedPayoffReason", ""),
+            "status": h.get("status"),
+        }
+        if commit == current_chapter:
+            due.append(info)
+        elif commit < current_chapter:
+            overdue.append(info)
+
+    return {
+        "ok": True,
+        "command": "due-this-chapter",
+        "currentChapter": current_chapter,
+        "due": due,
+        "overdue": overdue,
+        "dueCount": len(due),
+        "overdueCount": len(overdue),
+    }
+
+
+# --------------- cross-volume payoff verification --------------------------
+
+def _classify_hook_for_volume(hook: dict, vstart: int, vend: int,
+                               current_chapter: int) -> dict:
+    """Classify a hook (planted in [vstart, vend]) against the volume's end.
+
+    Returns a dict with keys: classification, severity, reason, plus the hook
+    fields the caller needs to display.
+    """
+    hid = hook.get("hookId")
+    status = (hook.get("status") or "").strip().lower()
+    start_ch = int(hook.get("startChapter") or 0)
+    last_adv = int(hook.get("lastAdvancedChapter") or 0)
+    commit = hook.get("committedPayoffChapter")
+    is_resolved_here = (status in RESOLVED_STATUSES) and last_adv <= vend
+    forgotten_window = max(1, 5)  # heuristic: hasn't moved in last 5+ chapters
+    base = {
+        "hookId": hid,
+        "type": hook.get("type"),
+        "startChapter": start_ch,
+        "lastAdvancedChapter": last_adv,
+        "status": status,
+        "committedPayoffChapter": commit if isinstance(commit, int) else None,
+        "expectedPayoff": hook.get("expectedPayoff", ""),
+    }
+
+    if is_resolved_here:
+        base.update({
+            "classification": "paid-off-this-volume",
+            "severity": "ok",
+            "reason": "status=resolved within volume",
+        })
+        return base
+
+    # Future-volume commitment (committedPayoffChapter > vend)
+    if isinstance(commit, int) and commit > vend:
+        base.update({
+            "classification": "future-committed",
+            "severity": "ok",
+            "reason": f"committedPayoffChapter={commit} (after volume end {vend})",
+        })
+        return base
+
+    # Forgotten: open + no future commitment + hasn't moved in a while
+    chapters_idle = vend - last_adv if last_adv > 0 else vend - start_ch
+    if chapters_idle > forgotten_window:
+        base.update({
+            "classification": "forgotten",
+            "severity": "critical",
+            "reason": (
+                f"open at volume end (vend={vend}); "
+                f"lastAdvancedChapter={last_adv}; "
+                f"idle for {chapters_idle} chapters; no future commitment"
+            ),
+        })
+        return base
+
+    # Recently touched but unresolved
+    base.update({
+        "classification": "unpaid-open",
+        "severity": "warning",
+        "reason": (
+            f"open at volume end (vend={vend}); "
+            f"lastAdvancedChapter={last_adv}; no future commitment"
+        ),
+    })
+    return base
+
+
+def cmd_volume_payoff(book_dir: Path, volume: int | None,
+                      current_chapter: int | None) -> dict:
+    """Cross-volume payoff verification (gap #17).
+
+    Reads `story/outline/volume_map.md` (or fallback `volume_outline.md`) to
+    find volume N's chapter range. For every hook with `startChapter` in
+    [vstart, vend] and `payoffTiming` ∈ {volume-end, mid-arc} (or anything
+    with `committedToChapter` <= vend, which is stricter), classify:
+
+      - resolved AND lastAdvancedChapter <= vend  → ok
+      - committedToChapter set but unresolved at vend → critical (broken
+        promise)
+      - coreHook==True and unresolved at vend → critical
+      - status ∈ {open, progressing} at vend     → warning
+    """
+    if volume is None or volume < 1:
+        hard_err("volume-payoff requires --volume V (1-indexed, >= 1)")
+
+    boundaries = parse_volume_boundaries(book_dir)
+    fallback = book_dir / "story" / "outline" / "volume_outline.md"
+    if not boundaries and fallback.exists():
+        # parse_volume_boundaries only knows volume_map.md; do a quick
+        # second pass on volume_outline.md with the same range regex.
+        text = fallback.read_text(encoding="utf-8")
+        range_re = re.compile(r"(\d+)\s*[-–~]\s*(\d+)")
+        for line in text.splitlines():
+            m = range_re.search(line.strip())
+            if not m:
+                continue
+            s, e = int(m.group(1)), int(m.group(2))
+            if e < s:
+                continue
+            name = line.replace(m.group(0), "").strip(" :|·-—–")[:60] \
+                or f"vol-{len(boundaries)+1}"
+            boundaries.append({"name": name, "startCh": s, "endCh": e})
+        boundaries.sort(key=lambda v: v["startCh"])
+
+    if not boundaries:
+        return {
+            "ok": True,  # graceful degradation
+            "command": "volume-payoff",
+            "warning": "no volume_map.md / volume_outline.md or no parseable rows",
+            "volumeNumber": volume,
+            "chapterRange": [0, 0],
+            "hooksOpenedInVolume": 0,
+            "hooksResolvedByEnd": 0,
+            "issues": [],
+            "payoffRate": 0.0,
+            "summary": "no volume map; skipped",
+        }
+
+    if volume - 1 >= len(boundaries):
+        return {
+            "ok": False,
+            "command": "volume-payoff",
+            "error": f"volume {volume} not found (have {len(boundaries)} volumes)",
+            "volumeNumber": volume,
+            "chapterRange": [0, 0],
+            "hooksOpenedInVolume": 0,
+            "hooksResolvedByEnd": 0,
+            "issues": [],
+            "payoffRate": 0.0,
+            "summary": f"volume {volume} out of range",
+        }
+
+    vol = boundaries[volume - 1]
+    vstart = int(vol["startCh"])
+    vend = int(vol["endCh"])
+
+    if current_chapter is None:
+        manifest = load_json(book_dir / "story" / "state" / "manifest.json", {})
+        if isinstance(manifest, dict):
+            current_chapter = int(manifest.get("lastAppliedChapter", 0) or 0)
+        else:
+            current_chapter = vend
+
+    hooks_obj = load_json(book_dir / "story" / "state" / "hooks.json",
+                          {"hooks": []})
+    if not isinstance(hooks_obj, dict):
+        hooks_obj = {"hooks": []}
+    hooks = list(hooks_obj.get("hooks", []) or [])
+
+    # In-volume hooks with payoffTiming we care about, OR any with
+    # committedToChapter that names this volume.
+    PAYOFF_TIMINGS_OF_INTEREST = {"volume-end", "mid-arc"}
+    in_volume: list[dict] = []
+    for h in hooks:
+        if not isinstance(h, dict):
+            continue
+        start_ch = int(h.get("startChapter") or 0)
+        if not (vstart <= start_ch <= vend):
+            continue
+        timing = h.get("payoffTiming")
+        committed = h.get("committedToChapter")
+        if not isinstance(committed, int):
+            committed = h.get("committedPayoffChapter")
+        is_committed_in_vol = (isinstance(committed, int)
+                               and vstart <= committed <= vend)
+        if (timing in PAYOFF_TIMINGS_OF_INTEREST
+                or is_committed_in_vol
+                or h.get("coreHook") is True):
+            in_volume.append(h)
+
+    issues: list[dict] = []
+    resolved_by_end = 0
+
+    for h in in_volume:
+        hid = h.get("hookId")
+        status = (h.get("status") or "").strip().lower()
+        last_adv = int(h.get("lastAdvancedChapter") or 0)
+        committed = h.get("committedToChapter")
+        if not isinstance(committed, int):
+            committed = h.get("committedPayoffChapter")
+        is_resolved_by_end = (status in RESOLVED_STATUSES) and last_adv <= vend
+        if is_resolved_by_end:
+            resolved_by_end += 1
+            continue
+
+        # Forward-committed *past* vend → not this volume's responsibility.
+        if isinstance(committed, int) and committed > vend:
+            continue
+
+        # Committed within the volume but not resolved → broken promise.
+        if isinstance(committed, int) and vstart <= committed <= vend:
+            issues.append({
+                "severity": "critical",
+                "category": "committed payoff missed",
+                "hookId": hid,
+                "message": (
+                    f"hook {hid} 在 hooks.json 上承诺第 {committed} 章兑现，"
+                    f"但卷尾（第 {vend} 章）仍未 resolve"
+                ),
+            })
+            continue
+
+        # Core hook unresolved at volume end → critical.
+        if h.get("coreHook") is True:
+            issues.append({
+                "severity": "critical",
+                "category": "core hook unresolved at volume end",
+                "hookId": hid,
+                "message": (
+                    f"core hook {hid} 在第 {volume} 卷开（startChapter="
+                    f"{int(h.get('startChapter') or 0)}）但卷尾仍未兑现"
+                ),
+            })
+            continue
+
+        # Plain unresolved → warning.
+        issues.append({
+            "severity": "warning",
+            "category": "hook opened but unresolved at volume end",
+            "hookId": hid,
+            "message": (
+                f"hook {hid} 在第 {volume} 卷开但卷尾（第 {vend} 章）"
+                f"仍未 resolve / defer"
+            ),
+        })
+
+    opened = len(in_volume)
+    payoff_rate = (resolved_by_end / opened) if opened else 1.0
+    has_critical = any(i["severity"] == "critical" for i in issues)
+
+    return {
+        "ok": not has_critical,
+        "command": "volume-payoff",
+        "volumeNumber": volume,
+        "volumeName": vol.get("name"),
+        "chapterRange": [vstart, vend],
+        "currentChapter": current_chapter,
+        "hooksOpenedInVolume": opened,
+        "hooksResolvedByEnd": resolved_by_end,
+        "issues": issues,
+        "payoffRate": round(payoff_rate, 3),
+        "summary": (
+            f"volume {volume} [{vstart}-{vend}]: "
+            f"{resolved_by_end}/{opened} resolved, "
+            f"{sum(1 for i in issues if i['severity'] == 'critical')} critical, "
+            f"{sum(1 for i in issues if i['severity'] == 'warning')} warning"
+        ),
+    }
+
+
+def cmd_verify_volume_payoff(book_dir: Path, volume: int | None,
+                              current_chapter: int | None) -> dict:
+    if volume is None or volume < 1:
+        hard_err("verify-volume-payoff requires --volume V (1-indexed, >= 1)")
+
+    boundaries = parse_volume_boundaries(book_dir)
+    if not boundaries:
+        return {
+            "ok": False,
+            "command": "verify-volume-payoff",
+            "error": "no volume_map.md or no parseable volume rows",
+            "volume": volume,
+        }
+    if volume - 1 >= len(boundaries):
+        return {
+            "ok": False,
+            "command": "verify-volume-payoff",
+            "error": f"volume {volume} not found (have {len(boundaries)} volumes)",
+            "volumeCount": len(boundaries),
+        }
+    vol = boundaries[volume - 1]
+    vstart = int(vol["startCh"])
+    vend = int(vol["endCh"])
+
+    if current_chapter is None:
+        manifest = load_json(book_dir / "story" / "state" / "manifest.json", {})
+        if isinstance(manifest, dict):
+            current_chapter = int(manifest.get("lastAppliedChapter", 0) or 0)
+        else:
+            current_chapter = vend
+
+    hooks_obj = load_json(book_dir / "story" / "state" / "hooks.json",
+                          {"hooks": []})
+    if not isinstance(hooks_obj, dict):
+        hooks_obj = {"hooks": []}
+    hooks = list(hooks_obj.get("hooks", []) or [])
+
+    classified: list[dict] = []
+    summary = {"paid_off": 0, "future_committed": 0,
+               "unpaid_open": 0, "forgotten": 0}
+
+    for h in hooks:
+        if not isinstance(h, dict):
+            continue
+        start_ch = int(h.get("startChapter") or 0)
+        if not (vstart <= start_ch <= vend):
+            continue
+        c = _classify_hook_for_volume(h, vstart, vend, current_chapter)
+        classified.append(c)
+        if c["classification"] == "paid-off-this-volume":
+            summary["paid_off"] += 1
+        elif c["classification"] == "future-committed":
+            summary["future_committed"] += 1
+        elif c["classification"] == "unpaid-open":
+            summary["unpaid_open"] += 1
+        elif c["classification"] == "forgotten":
+            summary["forgotten"] += 1
+
+    has_critical = summary["forgotten"] > 0
+    return {
+        "ok": not has_critical,
+        "command": "verify-volume-payoff",
+        "volume": volume,
+        "volumeName": vol.get("name"),
+        "vstart": vstart,
+        "vend": vend,
+        "currentChapter": current_chapter,
+        "hooks": classified,
+        "summary": summary,
+        "totalHooksInVolume": len(classified),
+    }
+
+
 # ------------------------------- main --------------------------------------
 
 COMMANDS = {
@@ -659,16 +1159,62 @@ COMMANDS = {
     "health-report": cmd_health_report,
 }
 
+LEDGER_COMMANDS = {
+    "commit-payoff",
+    "uncommit-payoff",
+    "due-this-chapter",
+    "verify-volume-payoff",
+    "volume-payoff",
+}
+
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI args.
+
+    Two surfaces are supported (both stable):
+
+    * Legacy:  ``--book DIR --command <name> [--current-chapter N]``
+              for the original 4 commands (promote-pass / stale-scan /
+              validate / health-report).
+    * Subcommand: ``--book DIR <subcommand> [opts]``
+              for the commitment-ledger + verification commands. Also
+              supports the original 4 names as positional aliases.
+    """
+    all_cmds = sorted(set(COMMANDS.keys()) | LEDGER_COMMANDS)
+
     p = argparse.ArgumentParser(
         description="Hook governance: promote-pass / stale-scan / validate / "
-                    "health-report.",
+                    "health-report / commit-payoff / uncommit-payoff / "
+                    "due-this-chapter / verify-volume-payoff / volume-payoff.",
+        epilog=(
+            "Examples:\n"
+            "  hook_governance.py --book BK --command health-report\n"
+            "  hook_governance.py --book BK commit-payoff --hook-id H001 --chapter 47\n"
+            "  hook_governance.py --book BK uncommit-payoff --hook-id H001\n"
+            "  hook_governance.py --book BK due-this-chapter --current-chapter 47\n"
+            "  hook_governance.py --book BK verify-volume-payoff --volume 2\n"
+            "  hook_governance.py --book BK --command volume-payoff --volume 1\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--book", required=True, help="book directory")
-    p.add_argument("--command", required=True, choices=sorted(COMMANDS.keys()))
+    p.add_argument("--command", choices=all_cmds, default=None,
+                   help="legacy form (kept for back-compat). Equivalent to "
+                        "passing the same name as a positional subcommand.")
     p.add_argument("--current-chapter", type=int, default=None,
                    help="override manifest.json#lastAppliedChapter")
+    # Ledger-specific flags (also accepted in legacy form for symmetry).
+    p.add_argument("--hook-id", type=str, default=None,
+                   help="(commit-payoff / uncommit-payoff) hookId to operate on")
+    p.add_argument("--chapter", type=int, default=None,
+                   help="(commit-payoff) chapter to commit the payoff to")
+    p.add_argument("--reason", type=str, default=None,
+                   help="(commit-payoff) optional rationale stored on the hook")
+    p.add_argument("--volume", type=int, default=None,
+                   help="(verify-volume-payoff) volume index, 1-based")
+    # Positional subcommand. Optional so legacy --command keeps working.
+    p.add_argument("subcommand", nargs="?", choices=all_cmds, default=None,
+                   help="subcommand name (positional form)")
     return p.parse_args()
 
 
@@ -678,13 +1224,30 @@ def main() -> int:
     if not book.is_dir():
         hard_err(f"book directory not found: {book}")
 
-    fn = COMMANDS[args.command]
+    cmd = args.subcommand or args.command
+    if cmd is None:
+        hard_err("missing command (give a positional subcommand or --command)")
+
     try:
-        out = fn(book, args.current_chapter)
+        if cmd == "commit-payoff":
+            out = cmd_commit_payoff(book, args.hook_id, args.chapter, args.reason)
+        elif cmd == "uncommit-payoff":
+            out = cmd_uncommit_payoff(book, args.hook_id)
+        elif cmd == "due-this-chapter":
+            out = cmd_due_this_chapter(book, args.current_chapter)
+        elif cmd == "verify-volume-payoff":
+            out = cmd_verify_volume_payoff(book, args.volume, args.current_chapter)
+        elif cmd == "volume-payoff":
+            out = cmd_volume_payoff(book, args.volume, args.current_chapter)
+        elif cmd in COMMANDS:
+            out = COMMANDS[cmd](book, args.current_chapter)
+        else:  # pragma: no cover — argparse should have rejected
+            hard_err(f"unknown command: {cmd}")
+            return 2
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001
-        hard_err(f"{args.command} failed: {e!r}")
+        hard_err(f"{cmd} failed: {e!r}")
         return 2  # unreachable
 
     print(json.dumps(out, ensure_ascii=False, indent=2))

@@ -17,6 +17,8 @@ Claude 在这一阶段需要读：
 - `story/current_state.md`、`story/pending_hooks.md`、`story/style_guide.md`、`story/outline/volume_map.md`、`story/outline/story_frame.md`、`story/character_matrix.md`、`story/chapter_summaries.md`
 - `story/parent_canon.md`、`story/fanfic_canon.md`（如有）
 - `book.json` + `references/genre-profiles/<genre>.md`（拿 numericalSystem 开关、language 等）
+- `story/runtime/chapter-{NNNN}.audit-r{i-1}.json`（**i > 0 时必读**）—— 上一轮 Auditor 的 issues + 上一轮 reviser 试过的 mode + outcome + delta。Reviser 没读这份 artifact 视为契约违规——会反复用同一手法去撞同一个 critical。schema 见 [references/schemas/audit-result.md §10](../schemas/audit-result.md#10-audit-r-单轮-artifact)。
+- `audit_round_log.py --analyze` 的输出（`recurringIssues` + `stagnationDetected` + `scoreProgression`）—— orchestration step 7.0 已经跑过，作为参数喂入 Reviser
 - 用户指定 mode（如果没指定，按下方决策树自动选）
 
 ## Process
@@ -183,6 +185,65 @@ else:
 - **提前退出**：连续 2 轮分数提升 < 3 → 退出，把当前最佳版本落盘并向用户报告剩余 critical / warning。
 - **mode 选择失误**：用户后续可显式指定其它 mode 重跑（不消耗当章 3 轮预算）。
 - **数值不平**（数值题材修完后期初 + 增量 ≠ 期末）→ 强制 spot-fix 一轮专修数值；仍不平 → 报错给用户。
+
+## 防呆：避免轮间漏看（per-round artifact 契约）
+
+inkos 的 audit-revise loop 跑 ≤ 3 轮，每轮都有"上一轮已经报过的 critical issue
+本轮还在 / 不在"的判断需求。如果 Reviser 只看当前 audit 报告就改章，会出现两种
+退化：
+
+1. **漏看**：上一轮报的 critical 在本轮 audit 漏报（LLM 视野偏差），Reviser 误
+   以为已经修好；
+2. **重复同一手法**：上一轮试了 polish 没解决，本轮 chooseReviseMode 又选了
+   polish，连续两轮无效。
+
+orchestration 在 step 7 的 audit-revise loop 里把每轮 audit + 确定性闸门 + reviser
+动作 + delta 落到 `story/runtime/chapter-{NNNN}.audit-r{i}.json`，并在进入 round
+i (i > 0) 之前调 `audit_round_log.py --analyze` 做跨轮分析。Reviser 的契约：
+
+### 契约 1：必须读 audit-r{i-1}.json
+
+`previousRound` 至少包含 `audit.issues`（上一轮 LLM 报的）+ `reviser_action.mode`
+（上一轮试过的模式）+ `delta.issues_resolved` / `delta.issues_introduced`。Reviser
+拼 prompt 时把 `audit.issues` 中**未在 delta.issues_resolved 里的 critical**单独
+抽出做"持续未解决清单"，明确告诉 LLM："以下 issue 上一轮 reviser 用 mode=X 试过
+但没解决，这次不要再用同一手法。"
+
+### 契约 2：stagnation → 升级模式
+
+`audit_round_log.py --analyze` 返回的 `recurringIssues` 数组里 `severity=critical`
+且 `appearedInRounds` 至少含连续两轮（如 `[0, 1]` 或 `[1, 2]`）→
+`stagnationDetected=true`。orchestration step 7c.1 已经做了 mode 升级映射：
+
+| 上一轮 mode | stagnation 命中后本轮 mode |
+|-------------|---------------------------|
+| `polish`    | `rewrite`                 |
+| `rewrite`   | `rework`                  |
+| `rework`    | `rework`（已是最重，不再升级）|
+| `anti-detect` | `anti-detect`（专项不变） |
+| `spot-fix`  | `spot-fix`（用户单点指明）|
+
+Reviser 自身决策树（前文"模式选择决策树"）的输出会被这一层覆盖。Reviser 在 system
+prompt 里追加一句："本章已连续 N 轮 critical 未解决，本轮强制 mode=Y，请放开动作
+半径优先解决持续问题。"
+
+### 契约 3：target_issues 字段必须填
+
+orchestration step 7c.2 写 `audit-r{i}.json` 时，`reviser_action.target_issues`
+是 Reviser 本轮明确瞄准的 issue id / dim 列表（不是 audit 报的全集——是 Reviser
+**选择**去解决的子集）。这个字段：
+
+- 给下一轮 Auditor 看："这一轮 reviser 说要修 [9, 14, 25]，所以你重点检查这三条
+  到底修没修"；
+- 给跨章 analytics 看：哪些 dim 是这本书反复救火的高频维度。
+
+Reviser 必须输出这个字段（在生成 REVISED_CONTENT 之前以 `=== TARGET_ISSUES ===`
+sentinel 列出）；缺失则 orchestration 落 `[]` 并标 `outcome="applied-no-target"`。
+
+### 契约 4：不要重复 issues_introduced
+
+如果 `audit-r{i-1}.json#delta.issues_introduced` 非空（说明上一轮 reviser 引入
+了新问题），本轮 Reviser 要把它当 critical 优先级处理，避免越改越糟的螺旋。
 
 ## 注意事项
 
