@@ -218,11 +218,88 @@ def main() -> int:
         focus_p.parent.mkdir(parents=True, exist_ok=True)
         focus_p.write_text(focus_text, encoding="utf-8")
 
+    # ── inkos parity: 4 default artifacts at init time ─────────────────────
+    inkos_parity: dict = {}
+
+    # B-1. chapters/index.json = [] placeholder
+    idx_p = book_dir / "chapters" / "index.json"
+    idx_p.parent.mkdir(parents=True, exist_ok=True)
+    if not idx_p.exists():
+        idx_p.write_text("[]", encoding="utf-8")
+        files_created.append(str(idx_p))
+        inkos_parity["chapterIndex"] = "created (empty array)"
+
+    # B-2. brief.md preserved as separate file when --brief given
+    if args.brief:
+        try:
+            brief_text = _load_brief(args.brief)
+            brief_p = book_dir / "story" / "brief.md"
+            brief_p.parent.mkdir(parents=True, exist_ok=True)
+            brief_p.write_text(brief_text.rstrip() + "\n", encoding="utf-8")
+            files_created.append(str(brief_p))
+            inkos_parity["brief"] = "preserved as story/brief.md"
+        except Exception as e:  # noqa: BLE001
+            inkos_parity["brief"] = f"skipped: {e!r}"
+
+    # B-3. style_guide.md pre-fill with writing methodology (overwrite the
+    # placeholder template). Failure is non-fatal — the placeholder stays.
+    style_p = book_dir / "story" / "style_guide.md"
+    skill_root = Path(__file__).resolve().parent.parent
+    wm_script = skill_root / "scripts" / "writing_methodology.py"
+    if wm_script.is_file():
+        try:
+            import subprocess
+            res = subprocess.run(
+                [sys.executable, str(wm_script), "--lang", args.lang, "--markdown"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                style_p.parent.mkdir(parents=True, exist_ok=True)
+                style_p.write_text(res.stdout, encoding="utf-8")
+                inkos_parity["styleGuide"] = "pre-filled with writing methodology"
+            else:
+                inkos_parity["styleGuide"] = (
+                    f"skipped: writing_methodology.py exit={res.returncode}"
+                )
+        except Exception as e:  # noqa: BLE001
+            inkos_parity["styleGuide"] = f"skipped: {e!r}"
+    else:
+        inkos_parity["styleGuide"] = "skipped: writing_methodology.py not found"
+
+    # B-4. snapshots/0/ initial snapshot ("立项原点", supports rollback to init).
+    # Must run last — needs all the truth files (incl. brief.md, style_guide.md)
+    # populated above.
+    ss_script = skill_root / "scripts" / "snapshot_state.py"
+    if ss_script.is_file():
+        try:
+            import subprocess
+            res = subprocess.run(
+                [
+                    sys.executable, str(ss_script),
+                    "--book", str(book_dir),
+                    "create", "--chapter", "0",
+                ],
+                capture_output=True, text=True, timeout=15,
+            )
+            if res.returncode == 0:
+                inkos_parity["snapshot0"] = "created"
+            else:
+                tail = (res.stderr or res.stdout or "").strip().splitlines()[-1:]
+                inkos_parity["snapshot0"] = (
+                    f"skipped: snapshot_state.py exit={res.returncode} "
+                    f"({tail[0] if tail else ''})"
+                )
+        except Exception as e:  # noqa: BLE001
+            inkos_parity["snapshot0"] = f"skipped: {e!r}"
+    else:
+        inkos_parity["snapshot0"] = "skipped: snapshot_state.py not found"
+
     print(json.dumps({
         "bookId": args.id,
         "path": str(book_dir),
         "filesCreated": files_created,
         "nextStep": next_step,
+        "inkosParity": inkos_parity,
     }, ensure_ascii=False, indent=2))
     return 0
 

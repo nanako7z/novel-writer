@@ -244,11 +244,28 @@ enableFullCastTracking: false
 
 ## Output contract
 
-- `story/outline/story_frame.md` ——4 段散文（主题 / 冲突 / 世界 / 终局），≤ 3000 chars
+### 权威文件（authoritative）—— Phase 5+ 主路径
+
+- `story/outline/story_frame.md` ——**顶部必须带 YAML frontmatter**（嵌入 book_rules 完整字段；移植自 inkos `buildBookRulesFromStoryFrameFrontmatter`），紧接 4 段散文（主题 / 冲突 / 世界 / 终局），≤ 3000 chars。frontmatter 是 book_rules 的**唯一权威来源**。
 - `story/outline/volume_map.md` ——5+1 段散文（每卷主题情绪 / 卷间钩子 / 阶段目标 / 卷尾改变 / 节奏原则），≤ 5000 chars
-- `story/roles/major/<name>.md` 与 `story/roles/minor/<name>.md` ——一人一卡 prose，主角卡含完整 8 个 ## 子标题
-- `story/book_rules.md` 或 `story_frame.md` 顶部 frontmatter ——纯 YAML，≤ 500 chars
+- `story/roles/主要角色/<name>.md` 与 `story/roles/次要角色/<name>.md` ——一人一卡 prose，主角卡含完整 8 个 ## 子标题。**roles/ 是角色弧线的唯一权威来源**——`character_matrix.md` 不是。
 - `story/pending_hooks.md` ——12 列 Markdown 表（hook_id / 起始章节 / 类型 / 状态 / 最近推进 / 预期回收 / 回收节奏 / 上游依赖 / 回收卷 / 核心 / 半衰期 / 备注），≤ 2000 chars
+
+### Compat shim（兼容老路径，下游读取顺序 frontmatter → flat）
+
+- `story/book_rules.md` —— compat shim，**与 story_frame frontmatter 保持同步**。Architect 同时写两份；下游工具读取顺序：
+  1. 先读 `story/outline/story_frame.md` 顶部 YAML frontmatter（权威）
+  2. 缺/解析失败时 fallback 到 `story/book_rules.md`（shim）
+- `story/character_matrix.md` —— compat shim，由 Architect 从 roles/ 聚合生成（每个 ## 块对应一个 roles 文件）。下游读取顺序：
+  1. 先读 `story/roles/主要角色/*.md` + `story/roles/次要角色/*.md`（权威）
+  2. 缺/解析失败时 fallback 到 `story/character_matrix.md`（shim）
+
+### 为什么走双轨
+
+- Phase 5+ 工具链（commitment_ledger / hook_governance / state_project 等）按 frontmatter-first 顺序读
+- Phase 4 及更早（或外部工具直接 cat 读）按 flat 文件读
+- Architect 同时写两份保证两种读法都能拿到一致数据
+- 重构时只动权威文件，跑一次 Architect revise 重新生成 shim 即可
 
 ## Failure handling
 

@@ -396,6 +396,13 @@ function writeNextChapter(book):
     #   "前面 N 卷已完结，章节摘要 K 条，要不要做一次 consolidate？"
     # 用户点头才进 phase 12；不点头就放着，下次写完再问。
     # 严禁自动跑 consolidate——它会重写 chapter_summaries.json，是有损操作。
+    #
+    # 进入 phase 12 后的自动 hook promote-pass：phase 12 step 4 会 verbatim
+    # 调 `hook_governance.py promote-pass`（移植 inkos rerunAdvancedCountPromotion）——
+    # 卷压缩后，老 hook 的 advancedCount 可能跨过 ≥2 阈值，需要重判 `promoted` flag。
+    # Claude 跑到 phase 12 时**必须**按 12-consolidator.md step 4 执行此命令；
+    # 不能因为"主循环已经在 step 10.1 跑过 promote-pass"就跳过——consolidate 改了
+    # 章节摘要分布，advancedCount 估算依据变了。
 
     return {
         chapterNumber: chapterNo,

@@ -158,6 +158,60 @@ def apply_hook_ops(hooks_obj: dict, ops: dict, warnings: list[str]) -> dict:
     return {"hooks": list(by_id.values())}
 
 
+def _bump_book_metadata(book_dir: Path, chapter_no: int | None) -> dict:
+    """Mirror inkos `markBookActiveIfNeeded` + updatedAt bump.
+
+    Bumps `book.json#updatedAt` to current ISO8601, and on first chapter
+    persistence flips `status: incubating|outlining → active`. Atomic write
+    via the existing helper. Failures are non-fatal — we log the reason and
+    let the caller continue (apply_delta's main job has already succeeded).
+
+    Returns a structured report:
+        {"ran": true, "updatedAt": "...", "statusChanged": "incubating→active"|null}
+    or
+        {"ran": false, "reason": "..."}
+    """
+    bj = book_dir / "book.json"
+    if not bj.is_file():
+        return {"ran": False, "reason": f"book.json not found at {bj}"}
+    try:
+        book = json.loads(bj.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return {"ran": False, "reason": f"book.json unreadable: {e!r}"}
+    if not isinstance(book, dict):
+        return {"ran": False, "reason": "book.json is not a JSON object"}
+
+    from datetime import datetime as _dt, timezone as _tz
+    now_iso = _dt.now(_tz.utc).isoformat()
+
+    status_before = book.get("status")
+    status_after = status_before
+    # First-chapter status flip — chapter 1 is the canonical "we started" point.
+    # Honor incubating + outlining (inkos uses outlining; we default to incubating).
+    if chapter_no == 1 and status_before in ("incubating", "outlining"):
+        status_after = "active"
+
+    if book.get("updatedAt") == now_iso and status_after == status_before:
+        # No-op (clock didn't tick this microsecond AND no flip needed)
+        return {"ran": True, "updatedAt": now_iso, "statusChanged": None}
+
+    book["updatedAt"] = now_iso
+    if status_after != status_before:
+        book["status"] = status_after
+    try:
+        write_json(bj, book)
+    except OSError as e:
+        return {"ran": False, "reason": f"write failed: {e!r}"}
+
+    return {
+        "ran": True,
+        "updatedAt": now_iso,
+        "statusChanged": (
+            f"{status_before}→{status_after}" if status_after != status_before else None
+        ),
+    }
+
+
 def md_row(values: list) -> str:
     return "| " + " | ".join(str(v) if v is not None else "" for v in values) + " |"
 
@@ -216,6 +270,13 @@ def parse_args() -> argparse.Namespace:
         help="skip the book_lock acquire/release pass. The lock is advisory; "
         "use this when you've already acquired it externally or are running "
         "in a single-process pipeline that doesn't need the safety net.",
+    )
+    p.add_argument(
+        "--skip-book-metadata",
+        action="store_true",
+        help="skip the post-apply book.json metadata maintenance pass "
+        "(updatedAt bump + status flip incubating/outlining → active on first "
+        "chapter). Use for batch / dry-run scenarios.",
     )
     return p.parse_args()
 
@@ -579,6 +640,24 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         elif isinstance(validate_out, dict) and not validate_out.get("ok"):
             warnings.append(f"hook_governance validate failed: {validate_out.get('error')}")
 
+    # ── book.json metadata maintenance (mirrors inkos markBookActiveIfNeeded) ──
+    if args.skip_book_metadata or governance_blocked:
+        # Skip when explicitly disabled, or when governance refused to commit
+        # (status flip / updatedAt bump should only fire on a real successful write).
+        book_metadata = {
+            "ran": False,
+            "reason": "skipped via --skip-book-metadata"
+            if args.skip_book_metadata
+            else "skipped due to hookGovernanceBlocked",
+        }
+    else:
+        chapter_no = delta.get("chapter") if isinstance(delta, dict) else None
+        try:
+            book_metadata = _bump_book_metadata(book, chapter_no if isinstance(chapter_no, int) else None)
+        except Exception as e:  # noqa: BLE001
+            book_metadata = {"ran": False, "reason": f"unexpected: {e!r}"}
+            warnings.append(f"book metadata bump failed: {e!r}")
+
     print(json.dumps({
         "ok": True,
         "applied": True,
@@ -590,6 +669,7 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         "arbitration": arbitration_report,
         "hookGovernance": governance_report,
         "hookGovernanceBlocked": governance_blocked,
+        "bookMetadata": book_metadata,
     }, ensure_ascii=False, indent=2))
     return 1 if governance_blocked else 0
 
