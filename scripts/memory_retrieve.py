@@ -16,8 +16,18 @@ Output is JSON (default) or a markdown digest meant for direct prompt injection.
 
 CLI:
   python memory_retrieve.py --book <bookDir> --current-chapter N \
+    [--memo <chapter_memo.md>] \
     [--window-recent 6] [--window-relevant 8] \
     [--include-resolved-hooks] [--format json|markdown]
+
+`--memo` reads YAML frontmatter flags from a chapter_memo file and adjusts
+window defaults accordingly (gap item #3). Precedence: explicit CLI flags
+> memo flags > defaults.
+
+  isGoldenOpening : true → window-recent=2, window-relevant=0
+  cliffResolution : true → --include-resolved-hooks (auto)
+  arcTransition   : true → window-relevant=12
+  volumeFinale    : true → window-relevant=0 (only this volume's recent)
 """
 from __future__ import annotations
 
@@ -52,6 +62,48 @@ def read_text(p: Path) -> str:
         return p.read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def parse_memo_flags(memo_path: Path) -> dict[str, bool]:
+    """Parse chapter_memo YAML frontmatter for the 5 boolean flags.
+
+    Returns a dict with each known flag (defaulting False). Tolerant of:
+      * missing file (returns all-False)
+      * missing frontmatter (returns all-False)
+      * unknown keys (ignored)
+      * "true" / "True" / "yes" / "false" / "False" / "no"
+    """
+    flags = {
+        "isGoldenOpening": False,
+        "cliffResolution": False,
+        "arcTransition": False,
+        "volumeFinale": False,
+        "isReshootChapter": False,
+    }
+    if not memo_path.is_file():
+        return flags
+    try:
+        raw = memo_path.read_text(encoding="utf-8")
+    except OSError:
+        return flags
+    if not raw.startswith("---"):
+        return flags
+    body = raw[3:]
+    end = body.find("\n---")
+    if end < 0:
+        return flags
+    block = body[:end]
+    for line in block.splitlines():
+        line = line.rstrip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip().strip('"').strip("'").lower()
+        if key in flags:
+            flags[key] = val in {"true", "yes", "1"}
+    return flags
 
 
 # ──────────────────────── Selection logic ───────────────────────
@@ -300,14 +352,76 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--book", required=True, help="book directory (containing story/)")
     p.add_argument("--current-chapter", type=int, required=True, help="chapter number being composed")
-    p.add_argument("--window-recent", type=int, default=6, help="how many recent summaries to include in full")
-    p.add_argument("--window-relevant", type=int, default=8, help="max deeper-history summaries to include")
     p.add_argument(
-        "--include-resolved-hooks", action="store_true",
-        help="also include hooks resolved in the last 3 chapters (for cliff-resolution chapters)",
+        "--memo", type=Path, default=None,
+        help=("optional chapter_memo.md path; its YAML frontmatter flags "
+              "(isGoldenOpening / cliffResolution / arcTransition / volumeFinale) "
+              "auto-adjust window defaults. Explicit CLI flags still win."),
+    )
+    p.add_argument("--window-recent", type=int, default=None,
+                   help="how many recent summaries to include in full (default 6, or memo-flag-driven)")
+    p.add_argument("--window-relevant", type=int, default=None,
+                   help="max deeper-history summaries to include (default 8, or memo-flag-driven)")
+    p.add_argument(
+        "--include-resolved-hooks", action="store_true", default=None,
+        help="also include hooks resolved in the last 3 chapters (auto-set if memo cliffResolution=true)",
     )
     p.add_argument("--format", choices=["json", "markdown"], default="json")
     return p.parse_args()
+
+
+def resolve_windows(
+    cli_recent: int | None,
+    cli_relevant: int | None,
+    cli_resolved: bool | None,
+    memo_flags: dict[str, bool],
+) -> tuple[int, int, bool, list[str]]:
+    """Compute final (window_recent, window_relevant, include_resolved, applied).
+
+    Precedence: CLI > memo > default.
+    `applied` is a list of human-readable trace strings (for stats) noting
+    which memo flag(s) shaped the defaults.
+    """
+    default_recent = 6
+    default_relevant = 8
+    default_resolved = False
+
+    # Start with defaults
+    recent = default_recent
+    relevant = default_relevant
+    resolved = default_resolved
+    applied: list[str] = []
+
+    # Apply memo flags (lower precedence than CLI).
+    # cliffResolution: hooks resolved injection + 6/12 window
+    if memo_flags.get("cliffResolution"):
+        recent = 6
+        relevant = 12
+        resolved = True
+        applied.append("cliffResolution → recent=6 relevant=12 +include-resolved-hooks")
+    # isGoldenOpening: tightest window (overrides cliff if both true — golden wins)
+    if memo_flags.get("isGoldenOpening"):
+        recent = 2
+        relevant = 0
+        applied.append("isGoldenOpening → recent=2 relevant=0")
+    # arcTransition: widen relevant
+    if memo_flags.get("arcTransition") and not memo_flags.get("isGoldenOpening"):
+        relevant = max(relevant, 12)
+        applied.append("arcTransition → relevant=12")
+    # volumeFinale: zero out relevant (focus only on this volume)
+    if memo_flags.get("volumeFinale"):
+        relevant = 0
+        applied.append("volumeFinale → relevant=0")
+
+    # CLI overrides everything explicit
+    if cli_recent is not None:
+        recent = cli_recent
+    if cli_relevant is not None:
+        relevant = cli_relevant
+    if cli_resolved is not None:
+        resolved = bool(cli_resolved)
+
+    return recent, relevant, resolved, applied
 
 
 def main() -> int:
@@ -328,9 +442,18 @@ def main() -> int:
     summaries = summaries_obj.get("summaries", []) if isinstance(summaries_obj, dict) else []
     hooks = hooks_obj.get("hooks", []) if isinstance(hooks_obj, dict) else []
 
+    # Resolve memo-derived window defaults (CLI > memo > default).
+    memo_flags = parse_memo_flags(args.memo) if args.memo else {
+        "isGoldenOpening": False, "cliffResolution": False,
+        "arcTransition": False, "volumeFinale": False, "isReshootChapter": False,
+    }
+    window_recent, window_relevant, include_resolved, memo_trace = resolve_windows(
+        args.window_recent, args.window_relevant, args.include_resolved_hooks, memo_flags,
+    )
+
     # 1. Recent window — full content
-    recent = select_recent_summaries(summaries, args.current_chapter, args.window_recent)
-    recent_cutoff = args.current_chapter - args.window_recent
+    recent = select_recent_summaries(summaries, args.current_chapter, window_recent)
+    recent_cutoff = args.current_chapter - window_recent
 
     # 2. Active hooks within the chapter window
     active_hooks = select_active_hooks(hooks, args.current_chapter)
@@ -340,13 +463,13 @@ def main() -> int:
 
     # 4. Relevant deeper-history summaries (events-only)
     relevant = select_relevant_summaries(
-        summaries, args.current_chapter, recent_cutoff, anchor_terms, args.window_relevant,
+        summaries, args.current_chapter, recent_cutoff, anchor_terms, window_relevant,
     )
 
     # 5. Recently resolved hooks (optional)
     recently_resolved = (
         select_recently_resolved_hooks(hooks, args.current_chapter)
-        if args.include_resolved_hooks else []
+        if include_resolved else []
     )
 
     # 6. Character roster — characters mentioned in recent + relevant summaries
@@ -370,6 +493,11 @@ def main() -> int:
             "relevantCount": len(relevant),
             "activeHookCount": len(active_hooks),
             "totalChars": 0,  # filled in below
+            "windowRecent": window_recent,
+            "windowRelevant": window_relevant,
+            "includeResolvedHooks": include_resolved,
+            "memoFlags": memo_flags,
+            "memoFlagApplied": memo_trace,
         },
     }
 

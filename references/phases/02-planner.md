@@ -190,8 +190,14 @@ defer:
 
   ```bash
   python {SKILL_ROOT}/scripts/cadence_check.py --book <bookDir> \
-    --current-chapter <chapterNumber> --json
+    --current-chapter <chapterNumber> \
+    [--memo story/runtime/chapter_memo.md] --json
   ```
+
+  `--memo` 在 Planner 第二轮（已生成 memo 草稿后再回看 cadence）时传入；
+  首轮没有 memo 文件，可省略。带 memo 时：`isGoldenOpening: true` 会抑制
+  satisfaction-pressure 警告；`volumeFinale: true` 会额外输出
+  `volumeFinaleReady` 报告。
 
   把输出按下表分流进 memo 各段（详见 `references/cadence-policy.md`）：
 
@@ -246,11 +252,49 @@ defer:
 > 第 3 章：钉一个 3-10 章内可达成的具体短期目标（攒第一桶金 / 干翻小反派 / 救某人）。
 > 全程：场景 ≤ 3、人物 ≤ 3、信息分层（基础信息伴随主角行动揭示，世界规则伴随剧情节点揭示，禁止整段 exposition）。
 
+## Frontmatter flags（程式化置位，不靠下游运行时再猜）
+
+除了 `chapter / goal / isGoldenOpening / threadRefs` 四个必填字段，schema
+还允许五个 **可选 boolean flag**——下游脚本（memory_retrieve / cadence_check
+/ hook_governance / orchestration）会读取这些 flag 调整行为。Planner 必须
+在生成 memo 时按下表**程式化**置位（不要等下游再猜测）：
+
+| flag | 何时设 `true`（Planner 判定规则）| 下游消费 |
+|---|---|---|
+| `isGoldenOpening` | `chapterNumber <= 3`；**或** memo `## 当前任务` / `## 读者此刻在等什么` 表明本章是新弧线 / 新卷开篇（背景重设、新人物登场、新冲突起点）| memory_retrieve 缩到 recent=2 / relevant=0；cadence_check 抑制 satisfaction-pressure；composer step 2 row 1 输出 `golden-opening=true` 标志 |
+| `cliffResolution` | 上一章末尾留了 hard cliff（追杀未脱险 / 决策未落地）且本章正面回收（"## 当前任务" 含解扣动作）| memory_retrieve 自动 `--include-resolved-hooks`；composer §4.6 触发 `state_project --view subplot-threads` |
+| `arcTransition` | `chapterNumber == volume_map.md` 边界附近（卷间过渡 ±1 章）；**或** Analyzer 反馈含"上章已完结某 arc"且本章开新 arc | memory_retrieve 拉宽 relevant=12；composer §4.6 触发 `state_project --view emotional-trajectories`；orchestration step 4 触发 Architect 回顾 |
+| `volumeFinale` | `chapterNumber == volume_map.md` 当前卷的最后一章号 | memory_retrieve `relevant=0`（只看本卷）；cadence_check 输出 `volumeFinaleReady` 报告；hook_governance 检查 committedToChapter ≤ 卷末是否兑现 |
+| `isReshootChapter` | 用户显式要求重写第 N 章（N ≤ lastAppliedChapter）| apply_delta 走 reshoot 模式；orchestration 跳过 `manifest.lastAppliedChapter +1` |
+
+**判定优先级**（多 flag 同时为真时按下列**真值合并**而非"取最高"）：
+
+- `isGoldenOpening` 与 `arcTransition` 同时为真 → 黄金开篇优先（recent=2 / relevant=0），但 arcTransition 的 Architect 触发仍生效。
+- `volumeFinale` 与 `cliffResolution` 同时为真 → 都生效（卷尾收钩很常见）。
+- `isReshootChapter` 与其它 flag 正交，独立判断。
+
+**默认值**：所有五个 flag 默认 `false`。schema 不强制必须在 frontmatter 出
+现——只有需要置 `true` 的章节写出来；省略即默认 false。
+
+**写入示例**（卷尾且回收硬钩）：
+
+```yaml
+---
+chapter: 30
+goal: 兑现"庚辰刻字"指向赵执事，并完成本卷主线收束
+isGoldenOpening: false
+volumeFinale: true
+cliffResolution: true
+threadRefs: [H03, H07, S004]
+---
+```
+
 ## Output contract
 
 - 写入 `story/runtime/chapter_memo.md`（覆盖式写入；同一章节多次跑 Planner 取最后一次）
 - 文件 schema：见 `references/schemas/chapter-memo.md`
-- frontmatter 字段：`chapter: int`, `goal: ≤50 chars`, `isGoldenOpening: bool`, `threadRefs: string[]`
+- frontmatter 必填字段：`chapter: int`, `goal: ≤50 chars`, `isGoldenOpening: bool`, `threadRefs: string[]`
+- frontmatter 可选字段：`cliffResolution: bool` / `arcTransition: bool` / `volumeFinale: bool` / `isReshootChapter: bool`（默认 false，按上节规则程式化置位）
 - body 必须包含 7 个二级标题：`## 当前任务` / `## 读者此刻在等什么` / `## 该兑现的 / 暂不掀的` / `## 日常/过渡承担什么任务` / `## 关键抉择过三连问` / `## 章尾必须发生的改变` / `## 本章 hook 账` / `## 不要做`
 
 ## Failure handling

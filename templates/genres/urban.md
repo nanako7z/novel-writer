@@ -9,6 +9,22 @@ eraResearch: true
 pacingRule: "每2-3章一个小回报：商业收益、人脉拓展、对手受挫、信息优势"
 satisfactionTypes: ["商战碾压", "身份揭示", "人脉兑现", "对手打脸", "资源收割", "地位跃升"]
 auditDimensions: [1,2,3,6,7,8,9,10,11,12,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 4
+  satisfactionSequence:
+    - {type: "商战碾压", weight: 3}
+    - {type: "对手打脸", weight: 3}
+    - {type: "身份揭示", weight: 2}
+    - {type: "人脉兑现", weight: 2}
+    - {type: "资源收割", weight: 1}
+    - {type: "地位跃升", weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["布局章", "社交章"],  satisfactionPerN: 6}
+    middle: {chapterTypes: ["商战章", "社交章"],  satisfactionPerN: 3}
+    late:   {chapterTypes: ["商战章", "回收章"],  satisfactionPerN: 2}
+  fatigueGuards:
+    - {pattern: "连续 3 章同 chapterType",       action: "force-switch-type"}
+    - {pattern: "连续 4 章无爽点",                action: "satisfactionEmergency"}
 ---
 
 ## 题材禁忌

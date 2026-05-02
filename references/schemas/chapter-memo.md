@@ -12,8 +12,38 @@ Planner 阶段（02-planner）的输出契约。来源：`agents/planner-prompts
 |------|------|------|------|
 | `chapter` | int ≥ 1 | 是 | 本 memo 对应的章节号 |
 | `goal` | string（≤ 50 字） | 是 | 本章主目标，一句话动词驱动 |
-| `isGoldenOpening` | bool | 是 | 是否黄金三章范围内（chapter ∈ {1,2,3}） |
+| `isGoldenOpening` | bool | 是 | 是否黄金三章范围内（chapter ∈ {1,2,3}） OR 新弧线开篇 |
 | `threadRefs` | array<string> | 是 | 从 `pending_hooks` / `subplot_board` 中挑出的 id 列表 |
+| `cliffResolution` | bool | 否（默认 false） | 本章正面回收上一章 / 近章悬念，下游需注入"已 resolve hooks"作 continuity |
+| `arcTransition` | bool | 否（默认 false） | 弧线 / 卷间过渡章，需放宽 relevant memory 窗口、可能触发 Architect 回顾 |
+| `volumeFinale` | bool | 否（默认 false） | 卷尾终章，触发 cross-volume payoff 验证 + 收紧记忆窗口为本卷视角 |
+| `isReshootChapter` | bool | 否（默认 false） | 重写已落盘的旧章；与新章流程不同（不写新 manifest 行、apply_delta 走 reshoot 模式） |
+
+### 1.1 编程式 flags 的语义与下游消费方
+
+这五个布尔 flag 不是装饰性元数据——下游脚本会显式读取它们调整行为。
+Planner 必须在生成 memo 时按下述规则**程式化**地置位（不要依赖 Writer
+临时判断）。
+
+| flag | 何时置 true | 谁消费 | 消费行为 |
+|---|---|---|---|
+| `isGoldenOpening` | `chapter ≤ 3`，或 memo `## 当前任务` 涉及新弧线开篇 | `memory_retrieve.py` | `--window-recent 2 --window-relevant 0`（首章不需要长尾记忆）|
+| | | `cadence_check.py` | 抑制 satisfaction-pressure 警告（黄金三章不走常规 cadence）|
+| | | `03-composer.md` step 2 row 1 | 在 chapter_memo 摘要里追加 `\| golden-opening=true` |
+| `cliffResolution` | 上一章末尾留了硬钩子，本章正面回收 | `memory_retrieve.py` | 自动加 `--include-resolved-hooks`；窗口 6/12 |
+| | | `03-composer.md` §4.6 | 触发 `state_project.py --view subplot-threads` |
+| `arcTransition` | 卷间 / 弧线边界（按 volume_map.md 边界判断） | `memory_retrieve.py` | `--window-relevant 12`（拉宽相关记忆）|
+| | | `03-composer.md` §4.6 | 触发 `state_project.py --view emotional-trajectories` |
+| | | `00-orchestration.md` step 4 | Architect 回顾触发条件之一（与 volume_map 边界 OR 关系）|
+| `volumeFinale` | 章号 == 当前卷末章号（按 volume_map.md） | `memory_retrieve.py` | `--window-relevant 0`（只看本卷）|
+| | | `cadence_check.py` | 输出 `volumeFinaleReady: bool`（按 expected payoff schedule 是否完备）|
+| | | `hook_governance.py` | volume-payoff 验证（committedToChapter ≤ 卷末必兑现）|
+| `isReshootChapter` | 重写第 N 章（N ≤ lastAppliedChapter） | `apply_delta.py` | 走 reshoot 模式（覆盖 chapter file，不动 manifest 计数）|
+| | | `00-orchestration.md` | 跳过 manifest.lastAppliedChapter +1 步 |
+
+**优先级**：CLI 显式参数 > memo flag > 默认值。例如 Composer 调
+`memory_retrieve.py --window-recent 4` 时会覆盖 `isGoldenOpening: true` 默认
+带来的窗口缩小。
 
 ---
 
@@ -103,10 +133,11 @@ defer:
 
 ### 4.1 Frontmatter 硬校验
 
-- `chapter` 是正整数，且等于"上一已写章号 + 1"
+- `chapter` 是正整数，且等于"上一已写章号 + 1"（`isReshootChapter: true` 例外，等于被重写的旧章号）
 - `goal` 字符长度 ≤ 50（中文按字符计）
-- `isGoldenOpening`：当 `chapter <= 3` 时**必须** `true`，否则 `false`
+- `isGoldenOpening`：当 `chapter <= 3` 时**必须** `true`；否则可由 Planner 因"新弧线开篇"主动置 true
 - `threadRefs` 中的每个 id 必须真实存在于输入的 `pending_hooks` 或 `subplot_board`（不允许编造）
+- `cliffResolution` / `arcTransition` / `volumeFinale` / `isReshootChapter` 默认 false；Planner 按上节"何时置 true"程式化设置，不要靠下游运行时再猜
 
 ### 4.2 Body 段完整性
 

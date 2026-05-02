@@ -54,6 +54,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+WRITE_COMMANDS = {"add", "update", "set-status"}
+
 CHAPTER_STATUS = {
     "card-generated", "drafting", "drafted",
     "auditing", "audit-passed", "audit-failed", "state-degraded",
@@ -61,6 +63,66 @@ CHAPTER_STATUS = {
     "approved", "rejected",
     "published", "imported",
 }
+
+
+def _import_book_lock():
+    """Import book_lock in-process so acquire/release share our pid."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import book_lock  # type: ignore
+        return book_lock
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _acquire_lock(book_dir: Path, operation: str) -> tuple[bool, dict]:
+    """Acquire advisory book write lock in-process. Returns (ok, payload).
+
+    Falls through (returns ok=True) if book_lock module isn't importable —
+    the lock is advisory; absence of the module shouldn't block writes.
+    """
+    bl = _import_book_lock()
+    if bl is None:
+        return True, {"skipped": True, "reason": "book_lock module not importable"}
+    p = bl._lock_path(book_dir)  # noqa: SLF001
+    existing = bl._read_lock(p)  # noqa: SLF001
+    if existing is not None and not bl._is_expired(existing):  # noqa: SLF001
+        return False, {
+            "ok": False,
+            "result": "refused",
+            "reason": "lock held by another owner",
+            "lockPath": str(p),
+            "currentLock": existing,
+        }
+    from datetime import datetime, timedelta, timezone
+    import socket
+    payload = {
+        "pid": os.getpid(),
+        "operation": operation,
+        "acquiredAt": bl._now_iso(),  # noqa: SLF001
+        "expiresAt": (datetime.now(timezone.utc) + timedelta(
+            seconds=bl.DEFAULT_TTL_SEC,
+        )).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "host": socket.gethostname(),
+    }
+    bl._atomic_write_lock(p, payload)  # noqa: SLF001
+    return True, {
+        "ok": True, "result": "acquired", "lockPath": str(p), "lock": payload,
+    }
+
+
+def _release_lock(book_dir: Path) -> None:
+    bl = _import_book_lock()
+    if bl is None:
+        return
+    p = bl._lock_path(book_dir)  # noqa: SLF001
+    existing = bl._read_lock(p)  # noqa: SLF001
+    if existing is None or not bl._ours(existing):  # noqa: SLF001
+        return
+    try:
+        os.remove(p)
+    except OSError:
+        pass  # advisory; don't crash on release failure
 
 
 def _now() -> str:
@@ -416,6 +478,11 @@ def main() -> None:
     )
     ap.add_argument("--book", required=True, help="path to book directory")
     ap.add_argument("--json", action="store_true", help="JSON output even for human-friendly commands")
+    ap.add_argument(
+        "--skip-lock", action="store_true",
+        help="skip the advisory book write lock (only honored by add/update/set-status; "
+        "list/get/validate are read-only and never lock)",
+    )
     sub = ap.add_subparsers(dest="command", required=True)
 
     # add
@@ -462,7 +529,32 @@ def main() -> None:
         "get": cmd_get,
         "validate": cmd_validate,
     }
-    result = handlers[args.command](args)
+
+    # Acquire advisory lock for write commands.
+    lock_acquired = False
+    if args.command in WRITE_COMMANDS and not args.skip_lock:
+        op = f"chapter-index-{args.command}-ch-{getattr(args, 'chapter', '?')}"
+        ok, lock_payload = _acquire_lock(Path(args.book).resolve(), op)
+        if not ok:
+            print(json.dumps({
+                "ok": False,
+                "stage": "lock",
+                "error": "could not acquire book write lock",
+                "lockReport": lock_payload,
+                "hint": (
+                    "Inspect with `book_lock.py status`; clear with "
+                    "`book_lock.py release --force` if you're sure no other "
+                    "process is writing. Pass --skip-lock to bypass."
+                ),
+            }, ensure_ascii=False, indent=2), file=sys.stderr)
+            sys.exit(3)
+        lock_acquired = bool(lock_payload.get("ok") and not lock_payload.get("skipped"))
+
+    try:
+        result = handlers[args.command](args)
+    finally:
+        if lock_acquired:
+            _release_lock(Path(args.book).resolve())
 
     if args.json or args.command in ("add", "update", "set-status", "get"):
         print(json.dumps(result, ensure_ascii=False, indent=2))

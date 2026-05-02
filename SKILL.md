@@ -55,16 +55,26 @@ python {SKILL_ROOT}/scripts/init_book.py \
   --chapter-words <int> \
   [--lang zh|en] \
   [--fanfic-mode canon|au|ooc|cp] \
-  [--parent-book-id <id>]
+  [--parent-book-id <id>] \
+  [--brief <path-to-brief.md>] \
+  [--current-focus "<inline string>" 或 @<path>]
 ```
 
 脚本会落地：根目录 `inkos.json` + `books/<id>/{book.json, story/*, story/state/*, chapters/, story/runtime/, story/outline/, story/roles/...}`。
 
-**初始化后你需要做的事**（脚本不做语义工作）：
-1. 把用户给的题材描述、长期愿景填进 `books/<id>/story/author_intent.md`（替换"(Describe...)"占位）
-2. 把"接下来 1-3 章想做什么"填进 `current_focus.md`
-3. fanfic 模式：跑 [branches/fanfic.md](references/branches/fanfic.md) 抽 `fanfic_canon.md`
-4. 提醒用户："基础有了，现在可以让我写第 1 章。第 1 章会自动当成黄金开场处理。"
+**当用户在初始请求里就给了创作 brief / 详细立项想法**（"我想写一本…"+ 主题/主角/世界观/卷规划），别让它停在占位 author_intent.md 里——把 brief 通过 `--brief` 直接喂进去。两种姿势：
+
+- 若 brief 已经在某个文件：`--brief path/to/brief.md`
+- 若 brief 是用户消息里的散文：先 `Write` 到一个临时文件（如 `/tmp/brief.md`），再 `--brief /tmp/brief.md`；或用 process substitution `--brief <(echo "...")`（zsh/bash）
+
+**初始化后**：检查 init_book 输出的 JSON `nextStep` 字段：
+
+| `nextStep` | 含义 | 你接下来要做 |
+|---|---|---|
+| `"architect"` | 用户给了 brief，author_intent 已写入 | **立刻**进入 [phase 04 architect](references/phases/04-architect.md)（不要等"写第 1 章"），跑 5 SECTION + Foundation Reviewer，落盘 outline / roles / pending_hooks。完成后告诉用户"基础架构已生成，可以让我写第 1 章了"。 |
+| `"author_intent"` | 没给 brief，仍是占位 | 让用户填 `author_intent.md`（核心命题、主题）和 `current_focus.md`（接下来 1-3 章），等用户说"写第 1 章"时再触发 Architect。 |
+
+无论哪条路，fanfic 模式（`--fanfic-mode` 已设）都需要再跑一遍 [branches/fanfic.md](references/branches/fanfic.md) 抽 `fanfic_canon.md`。
 
 ## 主循环：写下一章
 
@@ -125,9 +135,12 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "看下伏笔账兑现了没 / commitment ledger" | `python scripts/commitment_ledger.py --memo <chapter_memo.md> --draft <draft.md>`（audit 之前自动跑）|
 | "卷尾兑现率 / cross-volume payoff" | `python scripts/hook_governance.py --book <bookDir> --command volume-payoff --volume N` |
 | "看 audit 改了几轮 / stagnation" | `python scripts/audit_round_log.py --book <bookDir> --chapter N --analyze` |
+| "上下文太长了 / context 超 budget" | `python scripts/context_budget.py --input <context_pkg.json> --budget-total 80000`（composer step 5 自动调；hard-overflow 时给用户决策） |
+| "锁住正在写的书 / 防多 session 撞写" | `python scripts/book_lock.py --book <bookDir> --json {acquire/status/release}`（apply_delta + chapter_index 写命令自动调；详见 [book-lock.md](references/book-lock.md)） |
 | "压缩前面卷 / consolidate / 摘要太多了 / 历史压缩一下" | 先跑 `python scripts/consolidate_check.py --book <bookDir>` 看是否该压；该压则进 [phase 12 consolidator](references/phases/12-consolidator.md) |
 | "列出我所有书 / book list" | `python scripts/book.py list` |
 | "看下《XX》详情 / book show" | `python scripts/book.py show <bookId>` |
+| "调整字数 / 改章数目标 / 改状态 / 改题材 / 改语言 / 改平台" | `python scripts/book.py update <bookId> [--chapter-words N] [--target-chapters N] [--status outlining\|active\|paused\|completed\|archived] [--genre <id>] [--lang zh\|en] [--platform tomato\|feilu\|qidian\|other] [--title "..."]`（原子写，至少给一项；改 genre 时若新 id 没 profile 会回退 other.md 并 warn） |
 | "重命名 book id" | `python scripts/book.py rename <old> <new>` |
 | "删除某本书 / book delete" | `python scripts/book.py delete <bookId> [--archive]`（默认归档不真删） |
 | "拷一份 / 用作模板 / book copy" | `python scripts/book.py copy <src> <new>` |
@@ -138,6 +151,10 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "导出 / 出版 / 打包成 epub/txt/md" | `python scripts/export_book.py --book <bookDir> --format txt\|md\|epub [--include-summary]` |
 | "看下跨章疲劳 / 是不是写重复了" | `python scripts/fatigue_scan.py --book <bookDir> --current-chapter N [--window 5]`（advisory） |
 | "节奏 / 爽点压力 / cadence" | `python scripts/cadence_check.py --book <bookDir> --current-chapter N`（Planner 阶段也会自动跑） |
+| "看下都有哪些题材 / list genres" | `python scripts/genre.py list [--json]`（同时列出 templates/genres/ 内置和 `<workdir>/genres/` 用户覆盖的 profile） |
+| "看 xianxia 题材 profile / show genre" | `python scripts/genre.py show <id> [--json]` |
+| "新增自定义题材 / 复制 profile 改" | `python scripts/genre.py add <newId> --from <baseId> [--name "..."] [--out <path>]`（默认写到 `<workdir>/genres/<newId>.md`，需手动 edit） |
+| "校验题材 profile schema" | `python scripts/genre.py validate [<id>]`（不带 id 校验全部） |
 
 ## 同人 / 风格分支
 
@@ -210,6 +227,15 @@ apply_delta 的具体行为：
 
 **L1 题材的具体形状**来自 `templates/genres/<book.genre>.md`——15 个内置 profile（仙侠、玄幻、都市、科幻、异世界、塔爬、地牢核、修仙、进展流、惊悚、温馨、罗曼塔、LitRPG、系统末日、其他）。每个 profile 含：fatigueWords（注入 Writer 的反 AI 词表）、chapterTypes、satisfactionTypes、pacingRule、auditDimensions（限定 Auditor 的 37 维子集）、numericalSystem/powerScaling/eraResearch 三个 toggle。题材 id 不在 catalog 内会回退 `other.md`。详见 [references/genre-profile.md](references/genre-profile.md)。
 
+### 题材 catalog 管理
+
+用 [`scripts/genre.py`](scripts/genre.py)（`list / show / add / validate`）。查找顺序是 **user override 优先于 bundled**：
+
+1. `<workdir>/genres/<id>.md`（用户自建/覆盖；可选目录）
+2. `{SKILL_ROOT}/templates/genres/<id>.md`（15 个内置）
+
+加自定义题材：`python scripts/genre.py add wuxia --from xianxia --name 武侠`（会在 `<workdir>/genres/wuxia.md` 落地一份从 xianxia 拷贝、id/name 已替换的骨架，提示用户手 edit 内容）。`book.json#genre` 写新 id 即生效。
+
 ## 滑窗记忆
 
 Composer 阶段第 0 步必须先调：
@@ -251,19 +277,25 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── writing-methodology.md   通用写作方法论（6 节，可注入 Writer prompt）
 │   ├── state-snapshots.md       每章真理文件全量快照（snapshots/<N>/）
 │   ├── audit-drift.md           上章审计未达标问题持久化（喂下章 Planner）
-│   └── schemas/                 5 个数据形状（含 chapter-index, audit-result 含轮 artifact）
+│   ├── context-budget.md        Composer 上下文预算 + drop priority
+│   ├── book-lock.md             advisory 写锁（apply_delta / chapter_index 自动调）
+│   └── schemas/                 6 个数据形状（含 chapter-index, audit-result 含轮 artifact, cadence-policy）
 ├── templates/
 │   ├── inkos.json + book.json   元数据种子
 │   ├── story/{*.md, state/*.json}  真理文件种子
 │   └── genres/                  15 题材 profile（init 时按 --genre 选用）
-├── scripts/                     33 个 Python 脚本
+├── scripts/                     36 个 Python 脚本
 │   ├── init_book.py             创建 books/<id>/ 子树
-│   ├── book.py                  多书 CRUD（list / show / rename / delete / copy；删除默认归档）
+│   ├── book.py                  多书 CRUD（list / show / update / rename / delete / copy；删除默认归档）
+│   ├── genre.py                 题材 catalog 管理（list / show / add / validate；user override 优先）
 │   ├── chapter_index.py         章节运营索引（add/update/set-status/list/get/validate；orchestration step 11 自动写）
 │   ├── snapshot_state.py        每章真理文件快照 + 回滚（create/list/show/restore/diff/prune；step 11.0a 自动跑）
 │   ├── audit_drift.py           上章 audit 未达标 issues 持久化（喂下章 Planner；step 11.0b 自动跑）
 │   ├── audit_round_log.py       audit-revise 每轮 artifact（step 7 每轮自动跑；--analyze 检测停滞）
 │   ├── commitment_ledger.py     hook 账兑现校验（audit 前 step 7a 自动跑）
+│   ├── genre.py                 题材 catalog 管理（list/show/add/validate；user override-first）
+│   ├── context_budget.py        Composer step 5：13 类预算强制 + drop priority
+│   ├── book_lock.py             advisory 写锁（acquire/release/status；apply_delta + chapter_index 自动调）
 │   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook 仲裁 + governance）
 │   ├── settler_parse.py         Settler 输出独立 parser（debug 用）
 │   ├── hook_governance.py       promote-pass / stale-scan / validate / health-report

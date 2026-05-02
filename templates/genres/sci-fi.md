@@ -10,6 +10,22 @@ eraResearch: true
 pacingRule: "Worldbuilding emerges through action, not exposition. Tech reveals tied to plot-critical moments. Political/exploration arcs alternate with action every 2-4 chapters."
 satisfactionTypes: ["Discovery", "Tech Breakthrough", "Political Victory", "First Contact", "Mystery Solved", "Survival Against Odds"]
 auditDimensions: [1,2,3,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 7
+  satisfactionSequence:
+    - {type: "Discovery",            weight: 3}
+    - {type: "Tech Breakthrough",    weight: 2}
+    - {type: "Mystery Solved",       weight: 2}
+    - {type: "First Contact",        weight: 2}
+    - {type: "Political Victory",    weight: 1}
+    - {type: "Survival Against Odds", weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["Setup", "Exploration"],  satisfactionPerN: 10}
+    middle: {chapterTypes: ["Exploration", "Combat"], satisfactionPerN: 5}
+    late:   {chapterTypes: ["Combat", "Payoff"],      satisfactionPerN: 3}
+  fatigueGuards:
+    - {pattern: "3 consecutive chapters same chapterType", action: "force-switch-type"}
+    - {pattern: "7 consecutive chapters without satisfaction", action: "satisfactionEmergency"}
 ---
 
 ## Genre Prohibitions

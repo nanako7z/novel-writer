@@ -1,11 +1,12 @@
 # Phase 04: Architect（散文密度基础设定）
 
-## 何时进入
+## 何时进入 / 立项触发
 
-仅在以下两种场景触发：
+仅在以下三种场景触发：
 
-1. **首次写作前**（第 1 章之前）：用户跑 init 后第一次写下一章时，如果 `story/outline/story_frame.md` / `volume_map.md` / `roles/` / `book_rules` / `pending_hooks` 任意一项缺失或仍是占位，必须先跑 Architect 把架子搭起来。
-2. **架子重做**：用户显式要求"重新设计基础设定"，或上一轮 Foundation Reviewer 报告 `verdict: reject` 之后用户拍板要重做。
+1. **立项即跑（init 带 brief）**：用户在 `init_book.py` 时通过 `--brief <path>` 提供了创作 brief。脚本会把 brief 写进 `story/author_intent.md` 并在输出 JSON 里返回 `"nextStep": "architect"`。看到这个信号 Claude 应**立刻进入 Phase 04**，不要等用户说"写第 1 章"——直接 generate 5 SECTION → Foundation Reviewer → 落盘。这一步是 inkos `book create --brief` 的等价行为。
+2. **首次写作前**（第 1 章之前，无 brief 路径）：用户跑 init **没有**给 brief，于是 `nextStep="author_intent"`——此时先让用户自己填 `author_intent.md` + `current_focus.md`，然后第一次"写下一章"才进 Architect。如果 `story/outline/story_frame.md` / `volume_map.md` / `roles/` / `book_rules` / `pending_hooks` 任意一项缺失或仍是占位，必须先跑 Architect 把架子搭起来。
+3. **架子重做**：用户显式要求"重新设计基础设定"，或上一轮 Foundation Reviewer 报告 `verdict: reject` 之后用户拍板要重做。
 
 正常的 ch 2、ch 3、…、ch N 不再跑 Architect——下游 Planner 直接读 outline。
 

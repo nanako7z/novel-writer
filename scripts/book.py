@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Book CRUD: list / show / rename / delete / copy.
+"""Book CRUD: list / show / update / rename / delete / copy.
 
 Multi-book management for the novel-writer SKILL.  Creation lives in
 `init_book.py`; this script covers everything else.
@@ -12,6 +12,7 @@ Subcommands
 -----------
   list                                  scan books/, list summaries
   show    <bookId>                      one-book detail
+  update  <bookId> [--field value ...]  patch book.json (atomic)
   rename  <oldId> <newId>               move dir + patch book.json#id
   delete  <bookId>                      archive by default; --force skips prompt
   copy    <srcId> <newId>               clone setup; chapters optional
@@ -294,6 +295,115 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(json.dumps(stats, ensure_ascii=False, indent=2))
         return 0
     print(render_show_text(stats))
+    return 0
+
+
+# --------------------------- update ----------------------------------------
+
+VALID_STATUSES = {"incubating", "outlining", "active", "paused", "completed", "archived"}
+VALID_PLATFORMS = {"tomato", "feilu", "qidian", "other"}
+VALID_LANGS = {"zh", "en"}
+
+# (book.json field name, argparse attr, type, validator)
+_UPDATE_FIELDS: list[tuple[str, str, type, set | None]] = [
+    ("title", "title", str, None),
+    ("chapterWordCount", "chapter_words", int, None),
+    ("targetChapters", "target_chapters", int, None),
+    ("genre", "genre", str, None),
+    ("platform", "platform", str, VALID_PLATFORMS),
+    ("status", "status", str, VALID_STATUSES),
+    ("language", "lang", str, VALID_LANGS),
+]
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    workdir = resolve_workdir(args.workdir)
+    book_dir = workdir / "books" / args.bookId
+    bj = book_dir / "book.json"
+    if not book_dir.is_dir() or not bj.is_file():
+        print(json.dumps({"error": f"book not found: {args.bookId}",
+                          "workdir": str(workdir)}, ensure_ascii=False),
+              file=sys.stderr)
+        return 1
+
+    try:
+        data = json.loads(bj.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(json.dumps({"error": f"book.json invalid: {e}"}), file=sys.stderr)
+        return 1
+
+    # Collect requested updates
+    updates: dict[str, tuple[Any, Any]] = {}  # field -> (old, new)
+    for field, attr, caster, choices in _UPDATE_FIELDS:
+        new_raw = getattr(args, attr, None)
+        if new_raw is None:
+            continue
+        if choices is not None and new_raw not in choices:
+            print(json.dumps({
+                "error": f"invalid value for --{attr.replace('_', '-')}: "
+                         f"{new_raw!r}; valid: {sorted(choices)}",
+            }, ensure_ascii=False), file=sys.stderr)
+            return 1
+        try:
+            new_val = caster(new_raw)
+        except (TypeError, ValueError) as e:
+            print(json.dumps({"error": f"cannot cast --{attr}: {e}"}),
+                  file=sys.stderr)
+            return 1
+        old_val = data.get(field)
+        if old_val == new_val:
+            continue
+        updates[field] = (old_val, new_val)
+
+    if not updates:
+        print(json.dumps({
+            "error": "no fields to update; pass at least one of "
+                     "--title --chapter-words --target-chapters --genre "
+                     "--platform --status --lang",
+        }, ensure_ascii=False), file=sys.stderr)
+        return 1
+
+    # Genre fallback warning
+    warnings: list[str] = []
+    if "genre" in updates:
+        new_genre = updates["genre"][1]
+        skill_root = Path(__file__).resolve().parent.parent
+        gp = skill_root / "templates" / "genres" / f"{new_genre}.md"
+        if not gp.is_file():
+            fb = skill_root / "templates" / "genres" / "other.md"
+            if fb.is_file():
+                warnings.append(
+                    f"genre '{new_genre}' has no profile in templates/genres/; "
+                    "Writer will fall back to other.md"
+                )
+            else:
+                print(json.dumps({
+                    "error": f"genre '{new_genre}' has no profile and other.md "
+                             "is also missing",
+                }, ensure_ascii=False), file=sys.stderr)
+                return 1
+
+    # Apply
+    for field, (_old, new) in updates.items():
+        data[field] = new
+    data["updatedAt"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _atomic_write_json(bj, data)
+
+    payload = {
+        "ok": True,
+        "bookId": args.bookId,
+        "updated": {f: {"from": o, "to": n} for f, (o, n) in updates.items()},
+        "warnings": warnings,
+        "book": data,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"Updated book \"{data.get('title', args.bookId)}\" ({args.bookId}):")
+        for f, (o, n) in updates.items():
+            print(f"  {f}: {o!r} -> {n!r}")
+        for w in warnings:
+            print(f"  warning: {w}")
     return 0
 
 
@@ -600,6 +710,28 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--workdir", default=None)
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_show)
+
+    # update
+    sp = sub.add_parser("update",
+                        help="Patch fields in books/<id>/book.json (atomic)")
+    sp.add_argument("bookId")
+    sp.add_argument("--workdir", default=None)
+    sp.add_argument("--title", default=None)
+    sp.add_argument("--chapter-words", type=int, default=None,
+                    help="Per-chapter target word count (book.json#chapterWordCount)")
+    sp.add_argument("--target-chapters", type=int, default=None,
+                    help="Total chapter target (book.json#targetChapters)")
+    sp.add_argument("--genre", default=None,
+                    help="Genre id (templates/genres/<id>.md must exist or "
+                         "Writer will fall back to other.md)")
+    sp.add_argument("--platform", default=None,
+                    choices=sorted(VALID_PLATFORMS))
+    sp.add_argument("--status", default=None,
+                    choices=sorted(VALID_STATUSES))
+    sp.add_argument("--lang", default=None, choices=sorted(VALID_LANGS),
+                    help="Writing language (book.json#language)")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_update)
 
     # rename
     sp = sub.add_parser("rename", help="Rename bookId (move dir + patch book.json)")

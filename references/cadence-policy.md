@@ -35,7 +35,7 @@
 | `sci-fi` | 探索 + 政治，每 5-7 章一次世界观揭示 | 7 | 4 | first-contact/tech-reveal/coup |
 | `other` | 兜底；3-5 章一次有意义改变 | 5 | 3 | 无固定列表 |
 
-> **注**：上表"高压 / 中压阈值"在 `cadence_check.py` 里**目前不分题材**——脚本统一用 `PRESSURE_HIGH=5 / PRESSURE_MED=3`。表格仅作 Planner 的参照基准；如需按题材精调，扩展点见 §扩展 §。
+> **注**：自从结构化 cadence schema 落地（见 `references/schemas/cadence-policy.md`），脚本会优先读题材 frontmatter 里的 `cadence.satisfactionWindow` 并推导阈值（`high = window`，`medium = ceil(window*0.6)`）。当题材 profile 没写 `cadence:` 子对象时，脚本会查上表的"高压阈值"列作为 `satisfactionWindow` 的推断默认值；再退一步是常量 `PRESSURE_HIGH=5 / PRESSURE_MED=3`。如要按题材精调，**首选方式**是在 profile frontmatter 里加 `cadence:` 子对象（最干净），其次才是改本表 / 改脚本。
 
 ## `cadence_check.py` 怎么算
 
@@ -74,14 +74,26 @@ python {SKILL_ROOT}/scripts/cadence_check.py \
   "satisfactionPressure": "high",
   "lastSatisfactionChapter": 6,
   "recommendedChapterTypes": ["战斗章", "悟道章"],
+  "recommendedNext": {
+    "chapterType": "战斗章",
+    "satisfactionType": "斗法碾压",
+    "reasoning": "band=middle; target 4-ch satisfaction cadence; gap=6; pressure=high → satisfactionType prioritized"
+  },
+  "fatigueAlerts": [
+    {"pattern": "连续 5 章无爽点", "action": "satisfactionEmergency", "evidence": {"gap": 6, "window": 5}}
+  ],
+  "cadencePolicy": {"satisfactionWindow": 5, "source": "embedded"},
   "pacingNotes": ["genre pacingRule: 修炼/悟道与战斗交替...", "satisfaction gap = 6 chapters → high pressure..."],
   "volumeBeatStatus": "approaching mid-point (ch 12 of 1-30)",
+  "volumeBand": "middle",
   "satisfactionTypes": [...],
   "chapterTypes": [...],
   "pacingRule": "...",
   "lookbackChapters": [...]
 }
 ```
+
+> **结构化 cadence 政策**（`cadence:` 子对象）的字段定义见 `references/schemas/cadence-policy.md`。`recommendedNext` 与 `fatigueAlerts` 都依赖于它；profile 缺失时按推断默认值跑（行为见 schema 文 §2）。
 
 ## Planner 怎么消费
 
@@ -103,9 +115,10 @@ python {SKILL_ROOT}/scripts/cadence_check.py \
 
 ## 扩展点
 
-- **按题材切换阈值**：`PRESSURE_HIGH / PRESSURE_MED` 当前是常量。如果某书需要按题材精调，可在 `cadence_check.py` 顶部加一个 `PRESSURE_BY_GENRE = {"litrpg": (3, 2), "cozy": (8, 5), ...}` dict，然后 `classify_pressure()` 参考 `book.json#genre` 取对应阈值
+- **按题材切换阈值**：~~常量~~ 已经替换为"读题材 `cadence.satisfactionWindow`"路径，详见 `references/schemas/cadence-policy.md`。如需进一步细化某题材的中/高压比例，可改 `cadence_check.classify_pressure()` 里的 `ceil(window*0.6)` 比例
 - **arc beat 层**：从 chapter_memo `arcTransition` / `cliffResolution` 标志反推；当前未实现
 - **book beat 层**：拿 `manifest.lastAppliedChapter / book.targetChapters` 算 `bookProgress`；接近 50% / 80% 时输出"全书冲突等级该升一档"提示
+- **题材级 fatigueGuards**：`cadence:` 里可加自定义触发器；当前 `cadence_check.py` 实现了 `force-switch-type` / `satisfactionEmergency` / `lower-tension` 三个 action，新增 action 须在 `evaluate_fatigue_guards()` 里挂判定逻辑
 
 ## 注意事项
 

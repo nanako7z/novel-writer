@@ -67,6 +67,7 @@ from settler_parse import (  # noqa: E402
 from hook_arbitrate import arbitrate as arbitrate_hooks  # noqa: E402
 
 HOOK_GOVERNANCE_SCRIPT = Path(__file__).resolve().parent / "hook_governance.py"
+BOOK_LOCK_SCRIPT = Path(__file__).resolve().parent / "book_lock.py"
 
 
 # ───────────────────────── parser shim ───────────────────────────
@@ -209,7 +210,77 @@ def parse_args() -> argparse.Namespace:
         "reads a fresh stdin chunk delimited by an EOF or `=== ATTEMPT_END ===` "
         "line. Useful when the caller pipes corrected output back.",
     )
+    p.add_argument(
+        "--skip-lock",
+        action="store_true",
+        help="skip the book_lock acquire/release pass. The lock is advisory; "
+        "use this when you've already acquired it externally or are running "
+        "in a single-process pipeline that doesn't need the safety net.",
+    )
     return p.parse_args()
+
+
+def _import_book_lock():
+    """Import book_lock in-process so acquire/release share our pid."""
+    try:
+        import book_lock  # type: ignore
+        return book_lock
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def acquire_book_lock(book: Path, operation: str) -> tuple[bool, dict]:
+    """Acquire the advisory book write lock (in-process).
+
+    Returns (ok, payload). On refusal (lock held), ok is False and payload
+    contains the structured refusal report. We import ``book_lock`` so the
+    pid + host stamped on the lock match this Python process — a release
+    later in this same run will be recognized as ours.
+    """
+    bl = _import_book_lock()
+    if bl is None:
+        return True, {"skipped": True, "reason": "book_lock module not importable"}
+    p = bl._lock_path(book)  # noqa: SLF001 — internal helper, intentional
+    existing = bl._read_lock(p)  # noqa: SLF001
+    if existing is not None and not bl._is_expired(existing):  # noqa: SLF001
+        return False, {
+            "ok": False,
+            "result": "refused",
+            "reason": "lock held by another owner",
+            "lockPath": str(p),
+            "currentLock": existing,
+        }
+    from datetime import datetime, timedelta, timezone
+    payload = {
+        "pid": os.getpid(),
+        "operation": operation,
+        "acquiredAt": bl._now_iso(),  # noqa: SLF001
+        "expiresAt": (datetime.now(timezone.utc) + timedelta(
+            seconds=bl.DEFAULT_TTL_SEC,
+        )).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "host": __import__("socket").gethostname(),
+    }
+    bl._atomic_write_lock(p, payload)  # noqa: SLF001
+    return True, {
+        "ok": True, "result": "acquired", "lockPath": str(p), "lock": payload,
+    }
+
+
+def release_book_lock(book: Path) -> dict:
+    bl = _import_book_lock()
+    if bl is None:
+        return {"skipped": True}
+    p = bl._lock_path(book)  # noqa: SLF001
+    existing = bl._read_lock(p)  # noqa: SLF001
+    if existing is None:
+        return {"ok": True, "result": "no-lock"}
+    if not bl._ours(existing):  # noqa: SLF001
+        return {"ok": False, "result": "not-ours", "lock": existing}
+    try:
+        os.remove(p)
+        return {"ok": True, "result": "released"}
+    except OSError as e:
+        return {"ok": False, "result": "io-error", "error": str(e)}
 
 
 def run_hook_governance(book: Path, command: str, current_chapter=None) -> dict:
@@ -304,6 +375,34 @@ def main() -> int:
     if not book.is_dir():
         err(f"book dir not found: {book}")
 
+    # ── Book write lock (advisory) ─────────────────────────────────────
+    lock_acquired = False
+    if not args.skip_lock:
+        ok, lock_payload = acquire_book_lock(book, operation="apply-delta")
+        if not ok:
+            print(json.dumps({
+                "ok": False,
+                "stage": "lock",
+                "error": "could not acquire book write lock",
+                "lockReport": lock_payload,
+                "hint": (
+                    f"Run `python {BOOK_LOCK_SCRIPT.name} --book {book} status` "
+                    "to inspect; if no other process is writing, "
+                    f"`python {BOOK_LOCK_SCRIPT.name} --book {book} release --force` "
+                    "clears it. Pass --skip-lock if you've already acquired it externally."
+                ),
+            }, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 3
+        lock_acquired = bool(lock_payload.get("ok") and not lock_payload.get("skipped"))
+
+    try:
+        return _main_apply(args, book, lock_acquired)
+    finally:
+        if lock_acquired:
+            release_book_lock(book)
+
+
+def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> int:
     # ── Stage 1 + Stage 2 + Stage 3 (with optional chained retries from stdin) ─
     parse_result: dict = {"ok": False, "parseStage": "extracted", "issues": "no input read"}
 

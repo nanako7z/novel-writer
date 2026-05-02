@@ -86,7 +86,72 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lang", default="zh", choices=["zh", "en"])
     p.add_argument("--fanfic-mode", choices=["canon", "au", "ooc", "cp"], default=None)
     p.add_argument("--parent-book-id", default=None)
+    p.add_argument("--brief", default=None,
+                   help="Path to a creative brief markdown file. If given, "
+                        "its content seeds story/author_intent.md and the "
+                        "next-step is set to 'architect' so Claude runs "
+                        "Architect immediately after init.")
+    p.add_argument("--current-focus", default=None,
+                   help="Inline string OR @path/to/file. If given, populates "
+                        "story/current_focus.md instead of the placeholder.")
     return p.parse_args()
+
+
+_FRONT_MATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
+
+
+def _load_brief(path: str) -> str:
+    """Read a brief from disk. If it contains its own YAML frontmatter or
+    starts with `# ` heading, treat as ready-to-write content. Otherwise
+    wrap in the author_intent template."""
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise SystemExit(f"--brief file not found: {p}")
+    body = p.read_text(encoding="utf-8")
+    return body
+
+
+def _wrap_brief_as_author_intent(brief: str, mapping: dict) -> str:
+    """If the brief already looks like a fleshed-out author_intent (has a
+    `# 作者意图` heading or YAML frontmatter), keep it verbatim. Otherwise,
+    inject it as the body under the standard headings."""
+    stripped = brief.lstrip()
+    has_frontmatter = stripped.startswith("---")
+    has_intent_heading = stripped.startswith("# 作者意图") or stripped.startswith("# Author Intent")
+    if has_frontmatter or has_intent_heading:
+        return brief
+    # Treat brief as raw description; fold it into the template's "核心命题" slot
+    # but preserve the structural headings so Architect can read the same shape.
+    template = (
+        "# 作者意图（Author Intent）\n\n"
+        "> 长程愿景。本文件由作者/Claude 维护，描述全书核心命题、主题、爽点曲线、情绪基调与目标读者。\n"
+        "> 写作过程中由 Planner 阶段读取，**不应被 runtime 自动改写**。\n\n"
+        "## 用户原始 Brief（init 时写入）\n\n"
+        f"{brief.rstrip()}\n\n"
+        "## 核心命题\n\n"
+        "（Architect 阶段会从上面的 brief 中提炼并填回这里。）\n\n"
+        "## 主题与情绪基调\n\n"
+        "- 主题关键词：\n"
+        "- 情绪基调：\n"
+        "- 全书爽点曲线（前期/中期/后期）：\n\n"
+        "## 目标读者画像\n\n"
+        f"- 平台：{mapping.get('platform', '')}\n"
+        f"- 题材：{mapping.get('genre', '')}\n"
+        "- 读者偏好：\n\n"
+        "## 不可违背的设定红线\n\n"
+        "- （Architect 阶段会从 brief 中识别硬约束并补全这里。）\n"
+    )
+    return template
+
+
+def _resolve_current_focus(arg: str) -> str:
+    """`--current-focus` accepts either an inline string or `@path` syntax."""
+    if arg.startswith("@"):
+        p = Path(arg[1:]).expanduser()
+        if not p.is_file():
+            raise SystemExit(f"--current-focus file not found: {p}")
+        return p.read_text(encoding="utf-8")
+    return arg
 
 
 def main() -> int:
@@ -136,10 +201,28 @@ def main() -> int:
             print(json.dumps({"error": f"book.json invalid: {e}"}), file=sys.stderr)
             return 1
 
+    # Optional: seed author_intent.md from a creative brief
+    next_step = "author_intent"
+    if args.brief:
+        brief_text = _load_brief(args.brief)
+        intent_p = book_dir / "story" / "author_intent.md"
+        intent_p.parent.mkdir(parents=True, exist_ok=True)
+        intent_p.write_text(_wrap_brief_as_author_intent(brief_text, mapping),
+                            encoding="utf-8")
+        next_step = "architect"
+
+    # Optional: seed current_focus.md
+    if args.current_focus:
+        focus_text = _resolve_current_focus(args.current_focus)
+        focus_p = book_dir / "story" / "current_focus.md"
+        focus_p.parent.mkdir(parents=True, exist_ok=True)
+        focus_p.write_text(focus_text, encoding="utf-8")
+
     print(json.dumps({
         "bookId": args.id,
         "path": str(book_dir),
         "filesCreated": files_created,
+        "nextStep": next_step,
     }, ensure_ascii=False, indent=2))
     return 0
 

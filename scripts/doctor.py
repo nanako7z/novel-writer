@@ -90,6 +90,9 @@ EXPECTED_SCRIPTS = [
     "audit_drift.py",
     "audit_round_log.py",
     "commitment_ledger.py",
+    "genre.py",
+    "context_budget.py",
+    "book_lock.py",
 ]
 
 CHAPTER_NAME_OK = re.compile(r"^\d{4}\.md$")

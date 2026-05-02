@@ -9,6 +9,23 @@ eraResearch: false
 pacingRule: "修炼/悟道与战斗交替，每3-5章一次小突破或关键收获"
 satisfactionTypes: ["悟道突破", "斗法碾压", "法宝收获", "身份揭示", "天劫渡过", "因果了结"]
 auditDimensions: [1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,24,25,26]
+cadence:
+  satisfactionWindow: 5
+  satisfactionSequence:
+    - {type: "悟道突破", weight: 3}
+    - {type: "斗法碾压", weight: 3}
+    - {type: "法宝收获", weight: 2}
+    - {type: "身份揭示", weight: 2}
+    - {type: "天劫渡过", weight: 1}
+    - {type: "因果了结", weight: 1}
+  volumeBeatDistribution:
+    early:  {chapterTypes: ["布局章", "悟道章"],  satisfactionPerN: 8}
+    middle: {chapterTypes: ["战斗章", "悟道章"],  satisfactionPerN: 4}
+    late:   {chapterTypes: ["战斗章", "回收章"],  satisfactionPerN: 3}
+  fatigueGuards:
+    - {pattern: "连续 3 章同 chapterType",       action: "force-switch-type"}
+    - {pattern: "连续 5 章无爽点",                action: "satisfactionEmergency"}
+    - {pattern: "连续 4 章高紧张 mood",          action: "lower-tension"}
 ---
 
 ## 题材禁忌

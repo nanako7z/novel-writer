@@ -188,11 +188,41 @@ python {SKILL_ROOT}/scripts/state_project.py \
 
 不触发条件就走原表 §2 装 raw 文件——projection 是预算紧时的备用通道，不是默认路径。
 
-#### 5. 写入 runtime 工件
+#### 5. Budget enforcement（喂 Writer 之前最后一道闸门）
+
+把上面拼好的 `context_package` 先**临时写一份**，跑一次 budget 闸门把超载
+按 priority 砍掉，再用 budgeted 版本作为 Writer 输入。详见
+[references/context-budget.md](../context-budget.md)。
+
+```bash
+python {SKILL_ROOT}/scripts/context_budget.py \
+  --input story/runtime/context_package.json \
+  --profile default \
+  --budget-total 80000 \
+  --out story/runtime/context_package.budgeted.json \
+  --json
+```
+
+处理规则：
+
+- `budgetStatus == "ok"` —— 总量在预算内，原文件即可（脚本输出的 budgetedContext 与输入一致）。
+- `budgetStatus == "adjusted"` —— 已按 profile 砍过；用 `context_package.budgeted.json`
+  替代原文件喂 Writer。原文件保留作为审计参照。把 `perCategory` 列表整段写
+  进 `chapter_trace.composerInputs.budget`。
+- `budgetStatus == "hard-overflow"` —— priority 5 触底仍超 budget。**Composer
+  在此 abort 本章流程**，把 `warnings` 原样上报给用户，并建议：
+  1. 跑 `consolidate_check.py` 把更老的 summaries 合并进 volume_summaries；
+  2. 跑 `state_project.py --view hooks-grouped` 等派生视图替代原始大表（见 §4.6）；
+  3. 必要时上调 `--budget-total`（只有模型支持的 context 真的更大时才考虑）。
+
+不要硬塞给 Writer——预算超限是真实的输入压力信号，硬扛只会让 Writer 看到
+被尾截的承重段。
+
+#### 6. 写入 runtime 工件
 
 把三份产物写到：
 
-- `story/runtime/context_package.json`
+- `story/runtime/context_package.json`（已应用 budget 的版本）
 - `story/runtime/rule_stack.json`
 - `story/runtime/chapter_trace.json`
 

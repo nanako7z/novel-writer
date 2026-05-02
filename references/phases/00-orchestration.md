@@ -42,12 +42,16 @@ function writeNextChapter(book):
     # ── 3. Compose ─────────────────────────────────────────
     # references/phases/03-composer.md（无 LLM）
     # 3a. 先取滑窗记忆（避免 30+ 章后全量 chapter_summaries 爆 context）
+    # 直接传 --memo，让脚本根据 frontmatter flag 自适应窗口（见 schema/chapter-memo.md）
     memory = scripts/memory_retrieve.py --book <bookDir> \
                 --current-chapter chapterNo \
-                [tunables based on chapter_memo flags：
-                 isGoldenOpening → window-recent=2 window-relevant=0
-                 cliffResolution → --include-resolved-hooks
-                 arcTransition  → window-relevant=12]
+                --memo story/runtime/chapter_memo.md
+    # memo flag → 行为：
+    #  isGoldenOpening → window-recent=2 window-relevant=0
+    #  cliffResolution → --include-resolved-hooks (auto)
+    #  arcTransition  → window-relevant=12
+    #  volumeFinale   → window-relevant=0 (本卷视角)
+    # 显式 CLI 参数覆盖 memo flag。
     # 3b. 装配 context_pkg + rule_stack（吃 memory + 题材 profile）
     genreProfile = templates/genres/{book.genre}.md   # 若 id 不在 catalog 回退 other.md
     contextPkg, ruleStack, trace = runComposer(chapterMemo, memory, genreProfile, truth files)
@@ -58,7 +62,8 @@ function writeNextChapter(book):
     # ── 4. (可选) Architect 回顾 ────────────────────────────
     # 仅在以下条件之一时触发：
     #  · 首章（chapterNo == 1）且 story_frame.md 缺失或为占位
-    #  · 卷尾切换（volume_map 上标记的边界）
+    #  · 卷尾切换（volume_map 上标记的边界 OR chapter_memo.arcTransition: true
+    #    —— 后者更可靠，是 Planner 程式化判定的结果，前者是边界推断）
     #  · 用户显式要求 "重做架构"
     # references/phases/04-architect.md
     if needsFoundation:
