@@ -26,6 +26,111 @@ Settler 阶段的输出契约。来源：`models/runtime-state.ts` L127-142（Zo
 
 ---
 
+## 1b. Parser stages（3 段式解析）
+
+`scripts/settler_parse.py`（共享模块）+ `scripts/apply_delta.py --input-mode raw` 实现 inkos 同款 3 段式解析，目的是让 Settler 的小格式偏差不必整章重跑。
+
+```
+Settler raw chat output
+    │
+    ▼  Stage 1 — 宽松抽取（lenient_extract）
+       从 === RUNTIME_STATE_DELTA === / END 哨兵之间抽 JSON 块；
+       兼容缩进、缺少 END、外层 ```json```、纯 JSON 文件、嵌入 {…} 块
+    │
+    ▼  Stage 2 — soft-fix 归一化
+       按 alias 表自动修复常见格式偏差，写入 softFixes 数组
+    │
+    ▼  Stage 3 — 严格 schema 校验（validate_delta）
+       仍失败 → 返回 parserFeedback（中文反馈块）供 Settler 重试
+    │
+    ▼  apply（仅 apply_delta.py）
+       parseStage 走到 "applied"
+```
+
+每个返回 JSON 都带：
+
+| 字段 | 含义 |
+|------|------|
+| `parseStage` | `extracted` \| `softfix` \| `schema` \| `applied`——卡在哪一段 |
+| `softFixes`  | 自动修复列表，每条 `{ path, fix, from?, to? }` |
+| `parserFeedback` | 失败时给 Settler 的中文反馈块；成功时为 `""` |
+
+### Soft-fix 修复表
+
+`settler_parse.py` 在 Stage 2 自动修复以下偏差，**不**触发 Settler 重跑，但全部记录到 `softFixes`：
+
+| 类别 | 示例（错） → 修正后 | 备注 |
+|------|---------------------|------|
+| 顶层键 alias | `chapterNumber` / `chapter_number` → `chapter` | TOP_KEY_ALIASES |
+|              | `state_patch` / `statePatch` / `current_state_patch` → `currentStatePatch` | |
+|              | `hook_ops` → `hookOps`；`new_hook_candidates` → `newHookCandidates` | |
+|              | `chapter_summary` → `chapterSummary` | |
+|              | `subplot_ops` / `emotional_arc_ops` / `character_matrix_ops` → camelCase | |
+| HookRecord 键 alias | `hook_id` / `hookid` → `hookId` | HOOK_RECORD_ALIASES |
+|                     | `start_chapter` → `startChapter`；`last_advanced_chapter` → `lastAdvancedChapter` | |
+|                     | `expected_payoff` → `expectedPayoff`；`payoff_timing` → `payoffTiming` | |
+| ChapterSummary alias | `chapter_type` → `chapterType`；`hook_activity` → `hookActivity` | |
+|                       | `state_changes` → `stateChanges` | |
+| CurrentStatePatch alias | `current_location` → `currentLocation` 等所有 snake_case → camelCase | |
+| 类型强转 | `"chapter": "12"` → `"chapter": 12` | 含 "第12章" / "12回" 类自然语言数字提取 |
+|          | `"chapter": 12.0` → `"chapter": 12`（仅当 .0 整数浮点） | |
+| 枚举大小写 | `"status": "Resolved"` → `"resolved"` | 仅当小写后落入 VALID_HOOK_STATUS / VALID_PAYOFF_TIMING |
+| 数组包装 | `"upsert": {单条}` → `"upsert": [{单条}]` | 同样适用 mention/resolve/defer / newHookCandidates / *_ops |
+| 空值清理 | `"newHookCandidates": null` → 删除该键 | 同样适用 *_ops 数组 |
+| notes 强转 | `"notes": "一行"` → `"notes": ["一行"]` | empty string → `[]` |
+| 重复 alias | 同时出现 `chapter_number` 和 `chapter` → 丢弃 alias，保留 canonical | 记录 `drop_duplicate_alias` |
+
+### Hard error（触发 Settler 重跑）
+
+只有 Stage 3 仍失败的字段才作为 hard error 出现在 `parserFeedback` 中，例如：
+
+- 必填字段缺失：`chapter` / `hookOps.upsert[0].hookId` / `chapterSummary.title` 等
+- 类型完全错位：`chapter: "前言"`（无法提取数字）、`hookOps: "see notes"`（不是对象）
+- 业务约束冲突：`chapterSummary.chapter !== 顶层 chapter`、`hookOps.upsert` 含未知顶层键
+- 枚举值在 soft-fix 后仍非法：`status: "in-progress"`（不在 VALID_HOOK_STATUS 内）
+
+`parserFeedback` 模板：
+
+```
+=== SETTLER_FEEDBACK ===
+上一次输出的 RUNTIME_STATE_DELTA 有 N 处问题需要修正：
+- $.<path>: 必填字段缺失，期望 <type>
+- $.<path>: 你写了 "x"，但允许值是 <enum>
+请仅修正这几处，其余字段保持原样重新输出 RUNTIME_STATE_DELTA。
+=== END ===
+```
+
+如果连 Stage 1 都失败（沒有 `=== RUNTIME_STATE_DELTA ===` 哨兵 / 找不到任何 JSON 块），`parserFeedback` 改为提示 Settler 严格使用哨兵格式。
+
+### 推荐流水线
+
+```
+Settler raw output
+   │
+   ▼ scripts/settler_parse.py --mode raw --input settlement.txt --out delta.json
+   │   （只跑 Stage 1+2+3，不写真理文件；调试 / 离线检查用）
+   ▼
+delta.json (cleaned)
+   │
+   ▼ scripts/apply_delta.py --book <book> --delta delta.json
+   │   （--input-mode 默认 json，对清洗后的 JSON 再跑一次 Stage 2+3 + 落盘）
+   ▼
+truth files updated
+```
+
+或单步走完：`scripts/apply_delta.py --book <book> --delta settlement.txt --input-mode raw` ——直接把 Settler 原始输出喂给 apply_delta，省掉中间文件。
+
+`--input-mode` 取值：
+
+| 值 | 含义 |
+|----|------|
+| `json`（默认） | 输入为干净的 RuntimeStateDelta JSON。跳过 Stage 1，仍跑 Stage 2 + 3。**完全向后兼容**——所有旧调用方无需改动。 |
+| `raw` | 输入为 Settler 原始聊天输出（带 `=== POST_SETTLEMENT ===` / `=== RUNTIME_STATE_DELTA ===` 哨兵和前后散文）。运行完整 Stage 1 + 2 + 3。 |
+
+`scripts/settler_parse.py` 单独 CLI（同样支持 `--mode raw|json`，加 `--out` 写清洗后的 JSON、加 `--strict` 让任何 softFix 也算失败）适合调试 Settler 输出而**不**触碰真理文件。
+
+---
+
 ## 2. JSON 完整示例
 
 ```json

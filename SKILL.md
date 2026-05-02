@@ -1,6 +1,6 @@
 ---
 name: novel-writer
-description: 中文网文写作工作流（移植自 inkos CLI）。当用户要写小说、网文、同人或长篇虚构故事时使用，覆盖项目初始化、写下一章、审章/改章、风格模仿、同人 canon/AU/OOC/CP 设置、伏笔治理、章节文字打磨等场景。流水线 Plan → Compose → (Architect) → Write → Normalize → Audit → Revise → Settle → (Polish)，含 15 个题材 profile、37 个审计维度、9 类事实追踪、四级规则栈、伏笔生命周期治理、滑窗记忆、去 AI 味与敏感词扫描。即使用户没明说"用 novel-writer"，只要意图是写网文章节、做长篇连载、做同人创作或做风格模仿写作，都应主动用此 skill。**不要触发**于一次性短文、产品文档、PRD、技术博客、诗词歌赋、剧本/编剧、学术论文这类非长篇虚构连载的场景。
+description: 中文网文写作工作流（移植自 inkos CLI）。当用户要写小说、网文、同人或长篇虚构故事时使用，覆盖项目初始化、写下一章、审章/改章、风格模仿、同人 canon/AU/OOC/CP 设置、伏笔治理、章节文字打磨、卷级摘要压缩等场景。流水线 Plan → Compose → (Architect+FoundationReviewer) → Write → 写后检 → Normalize → Audit → Revise → Settle → (Polish)，含 15 个题材 profile、37 个审计维度、9 类事实追踪、四级规则栈、伏笔生命周期治理、滑窗记忆、3 阶段 Settler delta 解析、去 AI 味与敏感词扫描、章节卷级压缩。即使用户没明说"用 novel-writer"，只要意图是写网文章节、做长篇连载、做同人创作或做风格模仿写作，都应主动用此 skill。**不要触发**于一次性短文、产品文档、PRD、技术博客、诗词歌赋、剧本/编剧、学术论文这类非长篇虚构连载的场景。
 ---
 
 # novel-writer
@@ -85,22 +85,25 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 |---|---|---|
 | 02 | [planner](references/phases/02-planner.md) | 生成 chapter_memo（YAML+md），定义本章要兑现什么、不做什么 |
 | 03 | [composer](references/phases/03-composer.md) | 装配 context_pkg + rule_stack（无 LLM；先调 `memory_retrieve.py` 取滑窗） |
-| 04 | [architect](references/phases/04-architect.md) | 散文密度的基础设定（首章 / 卷切换才跑） |
-| 05 | [writer](references/phases/05-writer.md) | 写正文，13-14 段 prompt 模块化拼装 + 题材 profile 注入 |
+| 04 | [architect](references/phases/04-architect.md) | 散文密度的基础设定（首章 / 卷切换才跑；含 [Foundation Reviewer](references/foundation-reviewer.md) 闸门） |
+| 05 | [writer](references/phases/05-writer.md) | 写正文，13-14 段 prompt 模块化拼装 + 题材 profile 注入 + sentinel 输出格式 |
+| 5b/5c | (脚本) | `writer_parse.py` 拆 sentinel + `post_write_validate.py` 写后检（见 [post-write-validation](references/post-write-validation.md)） |
 | 06 | [observer](references/phases/06-observer.md) | 抽 9 类事实，输出 OBSERVATIONS 块 |
-| 07 | [settler](references/phases/07-settler.md) | 产 RuntimeStateDelta JSON |
+| 07 | [settler](references/phases/07-settler.md) | 产 RuntimeStateDelta JSON（apply_delta `--input-mode raw` 走 3 阶段 parser） |
 | 08 | [normalizer](references/phases/08-normalizer.md) | 单次长度修正 |
 | 09 | [auditor](references/phases/09-auditor.md) | 37 维审计（按题材 profile 过滤）+ 评分 |
 | 10 | [reviser](references/phases/10-reviser.md) | 6 模式修订（auto/polish/rewrite/rework/anti-detect/spot-fix） |
 | 11 | [polisher](references/phases/11-polisher.md) | audit 真正过线（≥88）后的文字层打磨，单 pass、不动情节 |
+| 12 | [consolidator](references/phases/12-consolidator.md) | 卷级摘要压缩 + 历史归档（手动触发；先跑 `consolidate_check.py` 检测） |
 
 **主循环关键不变量**（违反就停下）：
 
 1. 真理文件（`story/state/*.json`、`pending_hooks.md` 等）只能经 `scripts/apply_delta.py` 修改，不直接编辑
 2. 章节正文落盘前必须经过 audit-revise 闸门——即便没过线也要标 `audit-failed-best-effort`
 3. 阶段产物先写到 `story/runtime/chapter-{NNNN}.<phase>.md`，最终成果才落到 `chapters/` 与 `story/state/`
-4. LLM 输出解析失败：Planner 重试 ≤ 3，Architect ≤ 2，audit-revise 整轮 ≤ 3
+4. LLM 输出解析失败：Planner 重试 ≤ 3，Architect ≤ 2（含 [Foundation Reviewer](references/foundation-reviewer.md) 回环），audit-revise 整轮 ≤ 3
 5. Reflector **不是**单独阶段；其职责并入 audit-revise loop
+6. Writer 输出走 sentinel 格式 → `writer_parse.py` + `post_write_validate.py` 是 Normalize 之前的强制检查；critical 命中允许 Writer 重写一次
 
 ## 单点指令（不进主循环）
 
@@ -114,6 +117,7 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "重做架构" | phase 04 architect 单跑 |
 | "看下伏笔池压力 / 伏笔健康度" | `python scripts/hook_governance.py --book <bookDir> --command health-report` |
 | "校验一下真理文件没问题吧" | `python scripts/hook_governance.py --book <bookDir> --command validate` |
+| "压缩前面卷 / consolidate / 摘要太多了 / 历史压缩一下" | 先跑 `python scripts/consolidate_check.py --book <bookDir>` 看是否该压；该压则进 [phase 12 consolidator](references/phases/12-consolidator.md) |
 | "看一下当前进度" | 读 `story/state/manifest.json` + `chapter_summaries.json`，直接答 |
 
 ## 同人 / 风格分支
@@ -123,36 +127,57 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 
 ## 质量控制（确定性闸门）
 
-audit 之前必跑这两个脚本。把它们的 issue 列表合并到 audit issues 一起评估：
+写完一章到 audit 通过之间，按顺序跑这几个脚本。每个的 issue 列表都合并进 audit issues 一起评估。
+
+**1. Writer 落盘后第一步：拆 sentinel**
+
+```bash
+python {SKILL_ROOT}/scripts/writer_parse.py --file <raw_writer_output.md> --strict
+```
+
+Writer 必须按 [phase 05](references/phases/05-writer.md) 的 sentinel 格式（`=== CHAPTER_TITLE === / === CHAPTER_CONTENT === / === CHAPTER_SUMMARY === / === POSTWRITE_ERRORS ===`）输出。`writer_parse.py` 严格按 sentinel 拆 title/body/summary/postWriteErrors 出 JSON。`--strict` 缺关键 sentinel 直接 exit 2。
+
+**2. 拆完做写后检（mechanical 错误）**
+
+```bash
+python {SKILL_ROOT}/scripts/post_write_validate.py --file <body.md> --chapter N
+```
+
+抓的是 audit 不太管的机械错：章节编号 self-reference 对不上、段落形态（monolithic / 单段 / 碎片）、对话标点（半角 `"` 紧贴中文、配对错误）、注释泄漏（`[作者按]` / `<TODO>`）、长度 sanity。critical 命中（exit 2）就让 Writer 重写一次（详见 [references/post-write-validation.md](references/post-write-validation.md)）。
+
+**3. audit 之前的去 AI 味 + 敏感词**
 
 ```bash
 python {SKILL_ROOT}/scripts/ai_tell_scan.py --file <draft.md>
 python {SKILL_ROOT}/scripts/sensitive_scan.py --file <draft.md>
 ```
 
-- `ai_tell_scan` 命中 critical（如出现"核心动机"等推理框架术语在正文里）→ 必须改
+- `ai_tell_scan` 命中 critical（如"核心动机"等推理框架术语漏进正文）→ 必须改
 - `sensitive_scan` 政治词命中（severity=block）→ 必须删
 - 性 / 极端暴力词（severity=warn）→ 标记给作者，不强删
 
-参考词表与阈值见：
-- [references/ai-tells.md](references/ai-tells.md)
-- [references/sensitive-words.md](references/sensitive-words.md)
+参考词表与阈值见 [references/ai-tells.md](references/ai-tells.md) 和 [references/sensitive-words.md](references/sensitive-words.md)。
 
 ## 真理文件契约
 
 任何阶段需要更新真理文件，**必须**通过：
 
 ```bash
+# Settler 直接给的原始输出（含 === POST_SETTLEMENT === / === RUNTIME_STATE_DELTA === sentinel）
+python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <settler.raw.md> --input-mode raw
+
+# 或：已经清洗好的 JSON
 python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <runtime/chapter-NNNN.delta.json>
 ```
 
-脚本会做 schema 校验（拒绝不合规 JSON），原子写入（`.tmp` + rename），按字段路由到对应文件，并**自动调用** `hook_governance.py` 的 `validate` + `stale-scan` 作为闸门：
+脚本走 3 阶段 parser：(1) lenient 提 RUNTIME_STATE_DELTA 块（容忍前后 prose）；(2) soft-fix（key alias / 类型 coercion / 数组 wrap，详见 [schemas/runtime-state-delta.md](references/schemas/runtime-state-delta.md) §1b）；(3) 严格 schema 校验。原子写入（`.tmp` + rename），按字段路由到对应文件，并**自动调用** `hook_governance.py` 的 `validate` + `stale-scan` 作为闸门：
 
+- 解析失败：返回 `parserFeedback`（结构化反馈）→ 喂回 Settler 让它修，不是直接 crash
 - `validate` 报 critical → 退出码 1，`hookGovernanceBlocked: true`，要求 Settler 重写而不是落盘
 - `stale-scan` 标记过期钩子 → 不阻断，但写回 `stale: true` 标志供后续 Planner 参考
 - 想跳过治理（不推荐）：`apply_delta.py --skip-hook-governance`
 
-schema 详见 [references/schemas/runtime-state-delta.md](references/schemas/runtime-state-delta.md)；钩子治理逻辑见 [references/hook-governance.md](references/hook-governance.md)。
+调试 Settler 输出时（不写盘只看解析结果）：`python scripts/settler_parse.py --input <raw.md> --mode raw --out /tmp/d.json`。钩子治理逻辑见 [references/hook-governance.md](references/hook-governance.md)。
 
 直接编辑 `story/state/*.json` 视为脏写，会污染 manifest，**禁止**。
 
@@ -183,7 +208,7 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 {SKILL_ROOT}/
 ├── SKILL.md                     ← 你正在读
 ├── references/
-│   ├── phases/00-11-*.md        12 个阶段（编排 + radar + 10 agent + polisher）
+│   ├── phases/00-12-*.md        13 个阶段（编排 + radar + 10 agent + polisher + consolidator）
 │   ├── branches/{fanfic,style}.md
 │   ├── rule-stack.md            四级规则栈
 │   ├── genre-profile.md         15 题材 profile schema + 注入指南
@@ -192,16 +217,22 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── sensitive-words.md       三级敏感词
 │   ├── hook-governance.md       伏笔生命周期 + 4 治理命令
 │   ├── memory-retrieval.md      滑窗记忆算法
+│   ├── foundation-reviewer.md   Architect 5-section 产物的 LLM 审稿闸门
+│   ├── post-write-validation.md 写后检规则与 sentinel parser
 │   └── schemas/                 4 个数据形状
 ├── templates/
 │   ├── inkos.json + book.json   元数据种子
 │   ├── story/{*.md, state/*.json}  真理文件种子
 │   └── genres/                  15 题材 profile（init 时按 --genre 选用）
-├── scripts/                     8 个 Python 脚本
+├── scripts/                     12 个 Python 脚本
 │   ├── init_book.py             创建 books/<id>/ 子树
-│   ├── apply_delta.py           真理文件唯一写入闸门（含 hook governance）
+│   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook governance）
+│   ├── settler_parse.py         Settler 输出独立 parser（debug 用）
 │   ├── hook_governance.py       promote-pass / stale-scan / validate / health-report
 │   ├── memory_retrieve.py       Composer 阶段 0 调
+│   ├── consolidate_check.py     phase 12 触发检测（read-only）
+│   ├── writer_parse.py          Writer 输出 sentinel 严格 parser
+│   ├── post_write_validate.py   写后检（机械错 / 段落 / 对话标点 / 注释泄漏）
 │   ├── word_count.py            LengthSpec 区间判定
 │   ├── style_analyze.py         5 项纯文本风格统计
 │   ├── ai_tell_scan.py          去 AI 味确定性闸门

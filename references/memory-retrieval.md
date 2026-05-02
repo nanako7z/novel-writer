@@ -89,6 +89,34 @@ Composer 默认走"默认"那一行；只在 chapter_memo 显式标 `isGoldenOpe
 
 `--format markdown`：上述 payload 渲染成 ~2-3 KB 的人类可读 digest（# / ## / 列表），可直接粘进 prompt。
 
+## Relationship to Consolidator（与 [phase 12 Consolidator](phases/12-consolidator.md) 的关系）
+
+memory_retrieve 和 Consolidator 是**互补**的两层 context 调度——一横一纵：
+
+| 维度 | memory_retrieve.py | Consolidator (phase 12) |
+|---|---|---|
+| 触发频率 | 每章 Composer 都调一次（writeNextChapter step 3a） | 手动触发；写完一章后只读检测脚本 `consolidate_check.py` 决定是否提议 |
+| 操作类型 | **只读** —— 不修改任何真理文件 | **有损写入** —— 重写 `chapter_summaries.json`、归档明细到 `story/archive/volume-{N}.json`、追加 `volume_summaries.md` |
+| 处理范围 | 横切 —— 在最近 N 章 + 命中 anchor 的旧章里挑行 | 纵切 —— 把整卷的逐章行压成一段卷级散文 |
+| 输入颗粒 | chapter-level 行（events / characters / hookActivity / ...） | volume-level 段落（≤ 500 词叙事） |
+| LLM 调用 | 无 | 有（每完结卷一次 system prompt） |
+
+**为什么需要分工**：
+
+memory_retrieve 的"相关窗"是基于 anchor term 重叠的 substring 命中——它能从远端拉回"角色 X 在第 3 章做了什么"，但**只能拉到 `chapter_summaries.json` 里还存在的行**。一旦书写到 100+ 章，就算 retrieve 算法再聪明，那张活跃表本身就已经太大——读它就在烧 token，遑论扫它做相关性筛选。
+
+Consolidator 解决的是"**远端历史的形态**"问题：把已完结卷的 60-200 行明细换成 1 段 ≤ 500 词的叙事段落，写到 `story/volume_summaries.md`。该卷的逐章行从活跃表里删掉、归档到 `story/archive/volume-{N}.json`。**之后** memory_retrieve 看到的活跃表只剩当前未完卷的行，扫描成本回落到正常水平。
+
+**Composer 的实际读法**（30+ 章后）：
+
+1. 优先读 `story/volume_summaries.md` 的全部卷级段——便宜（每卷 ≤ 500 词，10 卷也才 5K 词），是远端记忆的常驻 context。
+2. 读 memory_retrieve 输出的 recent + relevant —— 当前卷的逐章细节。
+3. 不读 archives —— 那是只读历史档案，只在用户做 spot-fix 修改老章节时才回查。
+
+**memory_retrieve 不感知 Consolidator**：脚本本身不读 `volume_summaries.md` 也不读 archives——那是 Composer 装 contextPackage 时叠在 memory payload 之上的另一层。两个组件解耦运行，靠"活跃表只剩未完卷"这条契约协作。
+
+**何时跑 Consolidator**：见 [12-consolidator.md 何时进入](phases/12-consolidator.md#何时进入)。简版：`chapter_summaries.json` 行数 ≥ 60 且至少 1 卷已完结时，writeNextChapter 收尾会提示用户。
+
 ## 与 inkos SQLite 版的差异
 
 | 维度 | inkos `memory-retrieval.ts` | 本脚本 |

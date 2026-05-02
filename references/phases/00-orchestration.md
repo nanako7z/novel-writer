@@ -62,18 +62,57 @@ function writeNextChapter(book):
     #  · 用户显式要求 "重做架构"
     # references/phases/04-architect.md
     if needsFoundation:
+        # runArchitect 内部不是单次 LLM 调用——它现在是一个
+        # Architect ↔ Foundation Reviewer 的回环（整体 ≤ 2 轮）：
+        #   1) Architect 出 5 SECTION（story_frame / volume_map /
+        #      roles / book_rules / pending_hooks）
+        #   2) Foundation Reviewer 在内存里审稿 → verdict
+        #      ∈ {pass, revise, reject}
+        #      （详见 references/foundation-reviewer.md）
+        #   3) pass   → 切分 SECTION 落盘，本步骤完成
+        #      revise → 把 issues + overallFeedback 注回
+        #              Architect 跑第 2 轮，再审一次
+        #              第 2 轮还非 pass → best-effort 落盘
+        #              + architectStatus="review-failed"
+        #      reject → 不落盘，把 issues 抛给用户决策，
+        #              不自动重试，主循环在此中止
+        # Architect 调用次数 ≤ 2；Reviewer 解析失败 / LLM 抽风
+        # 走 Reviewer 内部降级，不消耗 Architect 重做预算。
         runArchitect(book, fanficCanon if fanfic mode)
-        # 失败重试 ≤ 2 次（FoundationReviewer 卡阀）
 
     # ── 5. Write ───────────────────────────────────────────
     # references/phases/05-writer.md
-    draft = runWriter(
+    rawWriter = runWriter(
         chapterMemo, contextPkg, ruleStack,
         previous chapter excerpt (≤ 800 字),
         style_guide.md, style_profile.json,
         fanfic_canon.md (if applicable)
     )
-    # 落盘：story/runtime/chapter-{NNNN}.draft.md
+    # 落盘：story/raw_writer/chapter-{NNNN}.md（保留所有 === BLOCK === sentinel）
+
+    # ── 5b. Parse Writer output（确定性 sentinel 解析）────────
+    # references/post-write-validation.md（脚本：scripts/writer_parse.py）
+    parsed = scripts/writer_parse.py --file story/raw_writer/chapter-{NNNN}.md --strict
+    if parsed.exitCode != 0:
+        # 缺 sentinel → 让 Writer 仅重输出缺失区块（≤ 2 次）
+        # 仍失败 → 改用默认 lenient 模式做 best-effort 解析，
+        #         并在 manifest 标 status=parser-failed-best-effort
+        retry up to 2; then fall back to lenient (drop --strict)
+    # 取 parsed.body 当作 draft；落盘：story/runtime/chapter-{NNNN}.draft.md
+    draft = parsed.body
+
+    # ── 5c. Post-write validate（确定性机械层闸门）───────────
+    # references/post-write-validation.md（脚本：scripts/post_write_validate.py）
+    pwv = scripts/post_write_validate.py --file story/runtime/chapter-{NNNN}.draft.md \
+              --chapter chapterNo [--book <bookDir>]
+    if pwv.exitCode == 2:    # 出现 critical（章节号自指 / 破折号 / 不是…而是… / 段落塌陷 / sentinel 残留 / 长度异常）
+        # 让 Writer 拿 pwv.issues 当反馈重写一次（最多 1 次）
+        rawWriter = runWriter(retry=true, postWriteFeedback=pwv.issues)
+        重跑 5b / 5c
+        if 仍 critical:
+            # 不再硬扛——报错给用户，不进 Normalizer / Auditor
+            return { status: "post-write-validate-failed", issues: pwv.issues }
+    # warning（exit 0 + warning 列表）合并到后续 Auditor 的 issues 池，由 Reviser polish 模式统一处理
 
     # ── 6. 长度治理（pre-audit normalize）─────────────────────
     # references/phases/08-normalizer.md
@@ -178,6 +217,16 @@ function writeNextChapter(book):
     write chapters/{NNNN}.md = draft
     update story/state/manifest.json#lastAppliedChapter = chapterNo
 
+    # ── 11.1 (可选) Consolidate 自动建议 —— 不擅自跑 ──────────
+    # references/phases/12-consolidator.md
+    # 落盘 + manifest 更新后，跑一次只读检测脚本：
+    #   python scripts/consolidate_check.py --book <bookDir> --threshold 60 --json
+    # 若返回 shouldConsolidate=true（章节摘要 ≥ 60 行 且 至少有 1 卷已完结
+    # 且 该卷尚未归档），向用户**提示一句**：
+    #   "前面 N 卷已完结，章节摘要 K 条，要不要做一次 consolidate？"
+    # 用户点头才进 phase 12；不点头就放着，下次写完再问。
+    # 严禁自动跑 consolidate——它会重写 chapter_summaries.json，是有损操作。
+
     return {
         chapterNumber: chapterNo,
         title, wordCount, auditResult: audit,
@@ -198,6 +247,7 @@ function writeNextChapter(book):
 | "整章 polish / 文字打磨一遍" | 直接跑 [phase 11 polisher](11-polisher.md)（绕过 audit 借线规则） |
 | "学一下这段文字的风格" | `references/branches/style.md` 的 analyze + import |
 | "更新一下设定 / 重做架构" | phase 04 architect 单跑 |
+| "压缩前面卷 / consolidate / 摘要太多了 / 把前面的卷归档 / 历史压缩一下" | [phase 12 consolidator](12-consolidator.md)（侧流，**不进**主循环；先跑 `scripts/consolidate_check.py` 看是否值得跑） |
 | "看一下当前进度" | 不进 phase；读 `story/state/manifest.json` + `chapter_summaries.json` 直接答 |
 
 ## 关键不变量（每一阶段都要守的）

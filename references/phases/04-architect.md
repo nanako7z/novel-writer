@@ -5,7 +5,7 @@
 仅在以下两种场景触发：
 
 1. **首次写作前**（第 1 章之前）：用户跑 init 后第一次写下一章时，如果 `story/outline/story_frame.md` / `volume_map.md` / `roles/` / `book_rules` / `pending_hooks` 任意一项缺失或仍是占位，必须先跑 Architect 把架子搭起来。
-2. **架子重做**：用户显式要求"重新设计基础设定"或 Foundation Reviewer 报告设定崩塌（v1 简化为人工触发）。
+2. **架子重做**：用户显式要求"重新设计基础设定"，或上一轮 Foundation Reviewer 报告 `verdict: reject` 之后用户拍板要重做。
 
 正常的 ch 2、ch 3、…、ch N 不再跑 Architect——下游 Planner 直接读 outline。
 
@@ -17,11 +17,32 @@ Claude 在这一阶段需要读：
 - `inkos.json` ——projectRoot 等
 - `story/author_intent.md` 或 `brief.md` ——用户原始创作 brief（最高优先级）
 - `references/genre-profiles/<genre>.md`（或内嵌于 SKILL）——题材底色、numericalSystem 开关、chapterTypes
-- 上一轮 Architect 输出（如果是重做）+ Foundation Reviewer 反馈（如果是重做）
+- 上一轮 Architect 输出（如果是重做）+ Foundation Reviewer 反馈（如果是重做；详见 [references/foundation-reviewer.md](../foundation-reviewer.md)）
 
 ## Process
 
 Architect 的产物是"散文密度的基础设定"——不是表格、不是 schema、不是 bullet list。Claude 在心中扮演"总架构师"，写出 5 个 SECTION，每个 SECTION 是若干 600-900 字的散文段。
+
+**编排骨架**（每次进入本阶段都按这个走，不要跳步）：
+
+```
+Architect 生成 5 SECTION
+   ↓
+Foundation Reviewer 判 verdict ∈ {pass, revise, reject}
+   ↓
+   ├─ pass   → 切分 SECTION，落盘到 story/outline + story/roles + story/pending_hooks
+   ├─ revise → 把 issues + overallFeedback 作为 reviewFeedbackBlock 注回 Architect 重跑
+   │           （整轮 ≤ 2 次，即 Architect 最多重做 1 次）
+   └─ reject → 中止；把 issues 抛给用户决策，不自动重试
+```
+
+**Architect 自己不打分、不自判通过**——所有"够不够好"的判断由独立的 Foundation Reviewer 角色给出。Architect 只负责"按 prompt 写出 5 SECTION"和"收到 review feedback 后带反馈重写"。
+
+### Foundation Reviewer 闸门
+
+Architect 出完 5 SECTION **不要立刻落盘**——先在内存里跑一轮 Foundation Reviewer 审稿。Reviewer 是独立的 LLM 角色（"资深编辑"视角），按 5 维打分（核心冲突 / 开篇节奏 / 世界一致性 / 角色区分度 / 节奏可行性，fanfic / series 模式换 5 个等价维度），verdict pass / revise / reject 决定下一步动作。
+
+完整 Reviewer 系统 prompt、维度集、rubric 表、severity 定义、输出 schema、决策树、failure handling、注意事项，全部见 [references/foundation-reviewer.md](../foundation-reviewer.md)。本 phase 文件**不重复**这些规则——Architect 编排器只需要知道"出了 5 SECTION 之后必须过这道门，pass 才能落盘"。
 
 ### 系统 prompt（搬自 inkos `architect.ts` L207-375，请 Claude 在心中扮演这个角色）
 
@@ -230,13 +251,18 @@ enableFullCastTracking: false
 
 ## Failure handling
 
-参 inkos：Architect 最多 2 次回顾。
+参 inkos：Architect 最多 2 轮——第 1 轮 Architect + Foundation Reviewer，必要时 + 第 2 轮 Architect + Foundation Reviewer。
 
-- 第 1 轮跑完跑 Foundation Reviewer（v1 简化为人工肉眼校验或下一轮 audit 时承担）。
-- 如果 Foundation Reviewer 报告（或人工指出）某 SECTION 不合格，附 review feedback 块进 user message 跑第 2 轮。
-- 第 2 轮还不合格 → 把问题抛给用户决策，不再自动重试。
+按 Reviewer verdict 分流：
 
-预算超限的处理：自删后再写一次本 SECTION，不算重试次数。
+- **`verdict: pass`**：切分 SECTION 落盘，进入下一阶段。本轮预算消耗 0 次重做。
+- **`verdict: revise`**（包括 Reviewer 解析失败时降级返回的 structural-format issue）：把 reviewer 的 `issues` 列表 + `overallFeedback` 拼成 `reviewFeedbackBlock` 附到 Architect 的 user message，跑第 2 轮 Architect → 再过一次 Reviewer。
+  - 第 2 轮 Reviewer 仍 ≠ pass → best-effort 落盘，写 `architectStatus: "review-failed"` 到 `story/runtime/architect-review.json`，把 issues 列表附在文件里给 Planner 后续兜底用，**不再**自动跑第 3 轮。
+- **`verdict: reject`**（设定方向性崩塌，score < 50 或多维度 < 50）：**不落盘、不自动重试**。把 Reviewer 给的 issues + overallFeedback 直接抛给用户，附一句"基础设定方向上有问题，建议你看一下后再决定是改 brief 还是改题材"，等用户拍板才能重跑。
+
+预算超限的处理：自删后再写一次本 SECTION，不算重试次数（这是 Architect 自己的 SECTION 内自检，不走 Reviewer 闸门）。
+
+完整 Reviewer 决策表与解析失败 / 抽风 fallback 见 [references/foundation-reviewer.md](../foundation-reviewer.md#failure-handling)。
 
 ## 注意事项
 
