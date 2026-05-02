@@ -61,6 +61,11 @@ from settler_parse import (  # noqa: E402
     validate_delta,
 )
 
+# Hook arbiter (port of inkos hook-arbiter.ts) — reshapes hookOps + new
+# candidates against the existing ledger BEFORE schema re-validation and
+# governance gate. Imported in-process to avoid a subprocess hop.
+from hook_arbitrate import arbitrate as arbitrate_hooks  # noqa: E402
+
 HOOK_GOVERNANCE_SCRIPT = Path(__file__).resolve().parent / "hook_governance.py"
 
 
@@ -175,6 +180,19 @@ def parse_args() -> argparse.Namespace:
         "--skip-hook-governance",
         action="store_true",
         help="skip the post-write hook_governance validate+stale-scan pass",
+    )
+    p.add_argument(
+        "--skip-arbitration",
+        action="store_true",
+        help="skip the pre-write hook arbiter (newHookCandidates / unknown-id "
+        "upserts will go straight to last-write-wins). Use only for legacy "
+        "deltas already shaped by an external arbiter.",
+    )
+    p.add_argument(
+        "--max-active-hooks",
+        type=int,
+        default=12,
+        help="hard cap on live hooks honored by the arbiter (default: 12; -1 disables)",
     )
     p.add_argument(
         "--feedback-format",
@@ -332,6 +350,43 @@ def main() -> int:
     state_dir = book / "story" / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── Hook arbitration (pre-write) ────────────────────────────────────
+    # Reshape `hookOps.upsert` (unknown ids) and `newHookCandidates` against
+    # the live ledger so apply_hook_ops sees a clean delta. Runs BEFORE the
+    # governance validate gate — arbitration shapes the delta; validate
+    # confirms it's clean.
+    arbitration_report: dict = {"ran": False, "reason": "no hookOps and no newHookCandidates"}
+    if not args.skip_arbitration and (delta.get("hookOps") or delta.get("newHookCandidates")):
+        hp = state_dir / "hooks.json"
+        cur_hooks_obj = load_json(hp, {"hooks": []})
+        cur_hooks = cur_hooks_obj.get("hooks", []) if isinstance(cur_hooks_obj, dict) else []
+        try:
+            arb = arbitrate_hooks(cur_hooks, delta, max_active=args.max_active_hooks)
+            delta = arb["resolvedDelta"]
+            decisions = arb["decisions"]
+            counts = {"created": 0, "mapped": 0, "mentioned": 0, "rejected": 0}
+            for d in decisions:
+                counts[d["action"]] = counts.get(d["action"], 0) + 1
+            arbitration_report = {
+                "ran": True,
+                "decisions": decisions,
+                "summary": (
+                    f"n_created={counts['created']} n_mapped={counts['mapped']} "
+                    f"n_mentioned={counts['mentioned']} n_rejected={counts['rejected']}"
+                ),
+                "counts": counts,
+            }
+            if counts["rejected"] > 0:
+                warnings.append(
+                    f"hook arbiter rejected {counts['rejected']} candidate(s); "
+                    "see arbitration.decisions for reasons."
+                )
+        except Exception as e:  # noqa: BLE001 — arbitration must not crash apply
+            arbitration_report = {"ran": False, "error": f"{e!r}"}
+            warnings.append(f"hook arbitration failed: {e!r}; continuing with raw delta.")
+    elif args.skip_arbitration:
+        arbitration_report = {"ran": False, "reason": "skipped via --skip-arbitration"}
+
     if "currentStatePatch" in delta:
         cs_p = state_dir / "current_state.json"
         cur = load_json(cs_p, {"facts": []})
@@ -433,6 +488,7 @@ def main() -> int:
         "parserFeedback": "",
         "filesModified": sorted(set(modified)),
         "warnings": warnings,
+        "arbitration": arbitration_report,
         "hookGovernance": governance_report,
         "hookGovernanceBlocked": governance_blocked,
     }, ensure_ascii=False, indent=2))

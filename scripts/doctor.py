@@ -58,6 +58,7 @@ EXPECTED_GENRES = [
 
 EXPECTED_SCRIPTS = [
     "init_book.py",
+    "book.py",
     "apply_delta.py",
     "hook_governance.py",
     "memory_retrieve.py",
@@ -79,6 +80,11 @@ EXPECTED_SCRIPTS = [
     "recover_chapter.py",
     "cadence_check.py",
     "state_project.py",
+    "hook_arbitrate.py",
+    "context_filter.py",
+    "narrative_control.py",
+    "writing_methodology.py",
+    "spot_fix_patches.py",
 ]
 
 CHAPTER_NAME_OK = re.compile(r"^\d{4}\.md$")

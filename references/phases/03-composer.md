@@ -239,6 +239,34 @@ Composer 是确定性流程，**不应失败**。可能的异常：
 
 不需要重试机制（无 LLM 调用）。
 
+## 辅助：轻量过滤 vs. 派生视图
+
+Composer 在装 selectedContext 前可选两条降噪路径，按需要二选一或都用：
+
+| 工具 | 何时用 | 输出形态 |
+|---|---|---|
+| `scripts/context_filter.py` | **drop noise**——只想去掉 `pending_hooks` 已回收行 / `chapter_summaries` 远窗口外的章 / `subplot_board` 已结支线 / `emotional_arcs` 太老的孤立行 | 原文件相同形状的 markdown，只是行少了。`(文件尚未创建)` 占位 / 全部行都被过滤的 fallback 都直接还原原文。 |
+| `scripts/state_project.py` | **derived views**——需要"按角色聚合的 hook 债务"、"主线进展时间线"、"卷视图"等**重新结构化**的派生视图 | 全新 schema 的 JSON / md（不是输入文件的子集），用于 selectedContext 单条 excerpt。 |
+
+简单原则：
+
+- 只是想砍掉无关行 → `context_filter.py`（更便宜，不改结构）。
+- 想要 cross-cut 的"切片视图" → `state_project.py`。
+
+`context_filter.py` 的调用形式（详见脚本 `--help`）：
+
+```bash
+python {SKILL_ROOT}/scripts/context_filter.py \
+  --book <bookDir> --current-chapter N \
+  --filter hooks|summaries|subplots|emotional-arcs|all \
+  [--keep-recent 6] [--json]
+```
+
+- 默认 `--keep-recent` 与 `chapter-cadence` 默认窗口一致（6）。
+- `--filter all` 一次跑四个，输出 `{ok, results: [{filter, source, originalLines, keptLines, content}]}`。
+- 单 filter 不带 `--json` 时直接把过滤后的纯文本写到 stdout，方便管道。
+- **fallback 守恒**：任何 filter 把数据行清空时回退原文，避免 Writer 看到空表错觉。
+
 ## 注意事项
 
 - **不调 LLM**：本阶段产物完全可由确定性逻辑生成，Claude 自己读文件、按表格拼即可。

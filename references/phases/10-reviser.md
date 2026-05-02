@@ -50,6 +50,71 @@ anti-detect: 反检测改写：在保持剧情不变的前提下，降低 AI 生
 spot-fix: 定点修复：只修改审稿意见指出的具体句子或段落，其余所有内容必须原封不动保留。修改范围限定在问题句子及其前后各一句。禁止改动无关段落
 ```
 
+### spot-fix 模式的两种产物形态
+
+spot-fix 模式 LLM 可以**任选其一**：
+
+1. **整章 REVISED_CONTENT 重出**——和其他模式一样，覆盖 `chapters/<NNNN>.md`。简单稳健，但 LLM 容易顺手改到不该改的段。
+2. **结构化 patches**（推荐，定点专用）——LLM 只输出一份 patches.json，Claude 调 `scripts/spot_fix_patches.py` 在本地确定性应用，从源头杜绝越界改动。
+
+#### patches.json 形状
+
+```json
+{
+  "patches": [
+    {
+      "line": 42,
+      "find": "原句中需要替换的精确字符串（必须能在该行附近唯一匹配）",
+      "replace": "替换后的字符串",
+      "reason": "对齐 audit issue #3：避免直白心理标签"
+    },
+    {
+      "line": 87,
+      "find": "another exact span",
+      "replace": "rewritten",
+      "reason": "..."
+    }
+  ]
+}
+```
+
+字段：
+
+- `line` — 1-based 行号锚点。脚本默认在 ±2 行窗口内找 `find`，找不到再退回全文唯一匹配
+- `find` — 精确子串。窗口内找不到精确匹配 → 自动退回 whitespace-normalized 模糊匹配（仅当目标长度 ≥10 字节）。两种匹配都要求在窗口里**唯一**，多重匹配直接报错
+- `replace` — 替换字符串，可多行；行数变化不影响后续 patch 的 line 锚点（脚本顺序处理，但每条只在自己的 ±window 里找，不依赖固定行号）
+- `reason` — 可选；只用于日志，不参与匹配
+
+#### 调脚本
+
+```bash
+python {SKILL_ROOT}/scripts/spot_fix_patches.py \
+  --file books/<id>/chapters/0042.md \
+  --patches /tmp/spot_fix_patches.json \
+  [--out <path>] \
+  [--dry-run] \
+  [--anchor-window 2] \
+  [--json]
+```
+
+- `--dry-run`：只报告哪些 patch 能 / 不能匹配，不写文件
+- 不带 `--out` 时**原地覆盖** `--file`，使用原子写（`.tmp` + `os.replace`）
+- `--json` 给 Claude 回吃：`{totalPatches, applied, skipped, appliedDetails: [{index, line, mode, ...}], errors: [{index, error, patch}]}`
+- 退出码：`0` 全部成功 / `1` 部分成功或全失败 / `2` 致命（文件或 JSON 不存在）
+
+#### 落到主循环里
+
+spot-fix 模式 §"工作步骤" 第 5 步可以分两叉：
+
+- **整章 REVISED_CONTENT** 路径：照原流程，把 LLM 输出覆盖 `chapters/<NNNN>.md`
+- **patches** 路径：把 LLM 给的 patches.json 落到 `story/runtime/chapter-{NNNN}.spot-patches.json`，调上面的脚本，得到 `applied/skipped` 摘要后再决定是否回环 Auditor
+
+patches 路径的好处：
+
+1. **物理保证**不越过模式动作半径——脚本只动 `find` 命中的 span，问题句之外的 0 字节都不会被改
+2. **可审计**——`appliedDetails` 数组完整记录哪行哪段被改、改了多少字节、用了 exact 还是 fuzzy 模式
+3. **错误透明**——非唯一匹配 / 找不到 `find` 时，把 `errors` 数组喂回 LLM 让它修 patch（而不是默默放弃）
+
 ### 模式选择决策树
 
 > 用户显式指定 mode → 直接用。否则按下面顺序判定：

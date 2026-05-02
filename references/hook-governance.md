@@ -171,6 +171,53 @@ apply_delta 在写完所有真理文件后**自动**调：
 
 ---
 
+## 8b. 钩子仲裁 (Arbitration)
+
+源：`.inkos-src/utils/hook-arbiter.ts` → 端口 `scripts/hook_arbitrate.py`，`apply_delta.py` 在 schema 校验之后、写盘之前**自动**调一次。仲裁与治理 (validate / promote-pass) 都不是同一件事——区别如下：
+
+| 子系统 | 时机 | 输入 | 输出 |
+|---|---|---|---|
+| **arbiter** | settler 出 delta → 写盘**之前** | `delta.hookOps` + `delta.newHookCandidates` + 当前 `hooks.json` | 已 remap 的 delta（candidates 全部解决），4 类决策记录 |
+| **promote-pass** | architect 写完 seeds → composer 装上下文**之前** | `hook-seeds.json` + `hooks.json` | 升级后的 `hooks.json`（seed → 正式 hook，加 `promoted=true`） |
+| **validate** | apply_delta 写盘之后 | 落盘的 `hooks.json` + `pending_hooks.md` + `chapter_summaries.json` | 跨文件一致性 issues |
+
+> 一句话：**arbiter 处理"候选"——promote-pass 处理"种子"——validate 处理"已落盘"**。
+
+### 4 种 verdict
+
+每条 candidate（含 hookOps.upsert 里 id 不在 hooks.json 的"伪 upsert"）走完 `evaluateHookAdmission` 后产出以下之一：
+
+| action | 触发条件 | 副作用 |
+|---|---|---|
+| `created` | admission 通过（type 非空 + 有 payoff signal + 无 duplicate_family + 未超 maxActiveHooks） | 生成新 canonical hookId（slug 自 type+payoff+notes，碰撞时加 `-2`/`-3` 后缀），追加进 hookOps.upsert |
+| `mapped` | admission 拒绝且 `reason=duplicate_family`，但 candidate 相对 matched hook 有**新增信息** | 把 candidate merge 进 matched hook 的 upsert 条目（`preferRicher` 文本 + 推进 lastAdvancedChapter + 重新解析 payoffTiming） |
+| `mentioned` | admission 拒绝且 `reason=duplicate_family`，candidate 与 matched hook 是**纯复述**（无新词、新汉字 bigram <2） | 不写 upsert，把 matched hookId 加入 hookOps.mention（确保它不在 resolve/defer 集合里） |
+| `rejected` | 缺 type / 缺 payoff signal / duplicate_family 但匹配的 hookId 已不存在 / `ledger_full`（活跃 ≥ maxActiveHooks） | 候选丢弃，记 decision，不写盘 |
+
+### 与 promote-pass 的分工
+
+- **arbiter** 看到的是**当前章节这一轮的产物**（settler 刚交的 delta），它解决的是"同一章里 settler 把同一伏笔讲了两遍"或"settler 给的 hookId 与 ledger 里已有那条其实是一回事"。
+- **promote-pass** 看到的是**沉淀过的 seed 池**（architect 阶段累计的候选），它解决的是"哪些 seed 已经够格变成正式 hook"。
+- arbiter **不**升级 seed → hook（那是 promote-pass 的职责），arbiter 只决定"这条 candidate 是不是该进 ledger / 进哪条 ledger 行"。
+- arbiter **不**写 `hooks.json`（那是 apply_delta 的下一步），arbiter 只 remap delta。
+
+### 调用入口
+
+apply_delta 自动调，无需手动；调试/dry-run 可单独跑：
+
+```bash
+python {SKILL_ROOT}/scripts/hook_arbitrate.py \
+  --hooks <book>/story/state/hooks.json \
+  --delta <runtime/chapter-NNNN.delta.json> \
+  [--max-active 12]
+```
+
+输出含 `decisions[]` + `resolvedDelta` + `summary`（`n_created=…`）。`apply_delta.py` 的 stdout JSON 里同样把 decisions 放在 `arbitration.decisions`。
+
+紧急情况下可用 `apply_delta.py --skip-arbitration` 走老的 last-write-wins 路径，**仅**当外部已有别的仲裁器时。日常流水线**不要**关。
+
+---
+
 ## 9. 与 Phase 7 / Phase 9 的关系
 
 - **Phase 7 (Settler)** 产 `hookOps.upsert`；只能引用现存 hookId，新候选写在 `newHookCandidates`。promote-pass 之后 seed 才会变成可被 upsert 的 hook。

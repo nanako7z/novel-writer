@@ -119,6 +119,11 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "看下伏笔池压力 / 伏笔健康度" | `python scripts/hook_governance.py --book <bookDir> --command health-report` |
 | "校验一下真理文件没问题吧" | `python scripts/hook_governance.py --book <bookDir> --command validate` |
 | "压缩前面卷 / consolidate / 摘要太多了 / 历史压缩一下" | 先跑 `python scripts/consolidate_check.py --book <bookDir>` 看是否该压；该压则进 [phase 12 consolidator](references/phases/12-consolidator.md) |
+| "列出我所有书 / book list" | `python scripts/book.py list` |
+| "看下《XX》详情 / book show" | `python scripts/book.py show <bookId>` |
+| "重命名 book id" | `python scripts/book.py rename <old> <new>` |
+| "删除某本书 / book delete" | `python scripts/book.py delete <bookId> [--archive]`（默认归档不真删） |
+| "拷一份 / 用作模板 / book copy" | `python scripts/book.py copy <src> <new>` |
 | "看一下当前进度 / status" | `python scripts/status.py [--book <bookDir>] [--chapters]`（默认列所有书） |
 | "环境体检 / doctor / 看下 SKILL 是否完整" | `python scripts/doctor.py [--book <bookDir>]`（self-test 12 个脚本 + templates 完整性 + 可选 book 子树校验） |
 | "看下 token 用量 / 字数曲线 / 通过率 / analytics" | `python scripts/analytics.py --book <bookDir> [--chapters] [--detection]` |
@@ -231,16 +236,24 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── cadence-policy.md        4 层节奏模型 + per-genre 默认
 │   ├── chapter-recovery.md      断点续跑识别与推荐
 │   ├── state-projections.md     真理文件压缩视图
+│   ├── narrative-control.md     文本上游清洗（实体剥离 + zh/en 软化）
+│   ├── writing-methodology.md   通用写作方法论（6 节，可注入 Writer prompt）
 │   └── schemas/                 4 个数据形状
 ├── templates/
 │   ├── inkos.json + book.json   元数据种子
 │   ├── story/{*.md, state/*.json}  真理文件种子
 │   └── genres/                  15 题材 profile（init 时按 --genre 选用）
-├── scripts/                     22 个 Python 脚本
+├── scripts/                     28 个 Python 脚本
 │   ├── init_book.py             创建 books/<id>/ 子树
-│   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook governance）
+│   ├── book.py                  多书 CRUD（list / show / rename / delete / copy；删除默认归档）
+│   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook 仲裁 + governance）
 │   ├── settler_parse.py         Settler 输出独立 parser（debug 用）
 │   ├── hook_governance.py       promote-pass / stale-scan / validate / health-report
+│   ├── hook_arbitrate.py        新候选 → created/mapped/mentioned/rejected 仲裁（apply_delta 自动调）
+│   ├── context_filter.py        truth file 轻量降噪（hooks/summaries/subplots/emotional-arcs）
+│   ├── narrative_control.py     文本实体剥离 + 软化替换（Composer 上游清洗用）
+│   ├── writing_methodology.py   生成 Writer 注入用的写作方法论 markdown
+│   ├── spot_fix_patches.py      phase 10 spot-fix 模式的 patches 应用器
 │   ├── memory_retrieve.py       Composer 阶段 0 调
 │   ├── consolidate_check.py     phase 12 触发检测（read-only）
 │   ├── writer_parse.py          Writer 输出 sentinel 严格 parser
