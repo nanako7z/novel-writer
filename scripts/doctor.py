@@ -72,6 +72,13 @@ EXPECTED_SCRIPTS = [
     "status.py",
     "doctor.py",
     "analytics.py",
+    "fatigue_scan.py",
+    "pov_filter.py",
+    "split_chapter.py",
+    "export_book.py",
+    "recover_chapter.py",
+    "cadence_check.py",
+    "state_project.py",
 ]
 
 CHAPTER_NAME_OK = re.compile(r"^\d{4}\.md$")

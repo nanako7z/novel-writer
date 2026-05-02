@@ -127,6 +127,67 @@ composerInputs:
 generatedAt: <ISO timestamp>
 ```
 
+#### 4.5 POV 过滤（可选）
+
+如果 `chapter_memo` 声明了**单 POV**（`pov: <character>` 或 `视角: <character>`），在写 runtime 工件之前，跑一次 POV 过滤把 POV 不可能知道的真相剔出 selectedContext：
+
+```bash
+python {SKILL_ROOT}/scripts/pov_filter.py \
+  --book <bookDir> \
+  --pov <chapter_memo 中的 POV 角色名> \
+  --current-chapter N \
+  --input <draft 出来但还没写盘的 context_package.json> \
+  [--strict]
+```
+
+处理规则：
+
+- 输出的 `filtered_context` 直接覆盖原 `selectedContext`（不要保留两份）。
+- 输出的 `pov_blindspots` 追加为新增 selectedContext 条目，`source = "runtime/pov_blindspots"`，`reason = "POV cannot witness; do not reveal in this chapter"`，`excerpt` 拼成"以下事项 POV 不知，本章不要主动揭示：<id>，<id>…"。
+- 把 `povChapters` / `relationships` 摘要写进 `chapter_trace.composerInputs.pov`（作为审计追踪）。
+
+`--strict` 何时打开（按 `book.json#fanficMode` 决定，按下表）：
+
+| 条件 | --strict |
+|---|---|
+| 非 fanfic（普通单 POV 章） | 看 chapter_memo 是否含 `strictPOV: true`，是则开 |
+| fanfic = canon | 开 |
+| fanfic = au | 关（世界观已变，inferred 应放行） |
+| fanfic = ooc | 关（OOC 改的是反应不是认知） |
+| fanfic = cp | 开（CP 视角盲区是爽点） |
+
+**fanfic mode 调参**：在 chapter_memo 的 frontmatter 里添加 `povStrict: true|false` 可强制覆盖以上默认。
+
+如果 chapter_memo 没声明 POV（多视角章 / 全知章），跳过本步——直接走原 selectedContext 即可。
+
+完整算法、输出 schema、blindspot 处理见 [references/pov-filter.md](../pov-filter.md)。
+
+#### 4.6 （可选）用 state projections 替换胖大的真理文件
+
+当上下文实在装不下原始真理文件时，可以让 Composer 用 `state_project.py` 拿压缩视图代替原始真理文件读取。详见 [references/state-projections.md](../state-projections.md)。
+
+触发条件（任一即可）：
+
+| 触发 | 行为 |
+|---|---|
+| `chapter_summaries.json` 行数 > 100 | 用 `--view characters-in-scene` 替原表 row 9-11（`recent_titles` / `recent_mood_type_trail` / `recent_endings`）的"近窗摘要全量"形态——projection 已经聚合好"谁在场 / 主导情绪"|
+| `pending_hooks.md` 行数 > 30 | 用 `--view hooks-grouped` 替原表 row 16（`pending_hooks#<hookId>`）的钩子整段——projection 把钩子分主线 / 支线 / 孤立三栏 |
+| chapter_memo `cliffResolution: true` | 加跑 `--view subplot-threads` 看核心 hook 的上下游（**追加**而非替换，原 hook debt 保留）|
+| chapter_memo `arcTransition: true` 或 audit drift 抱怨"角色情绪平/单一" | 加跑 `--view emotional-trajectories` |
+
+```bash
+python {SKILL_ROOT}/scripts/state_project.py \
+  --book <bookDir> --current-chapter N \
+  --view <one of: characters-in-scene|hooks-grouped|emotional-trajectories|subplot-threads> \
+  [--window 10] [--markdown]
+```
+
+输出（JSON 或 markdown）以单条 selectedContext 的形式塞进 `context_package.selectedContext`，`source = "runtime/state_projection/<view>"`，`reason = "Compressed projection in lieu of raw truth file (window=N)"`，excerpt 用 markdown 渲染（`--markdown`）保持人类可读。
+
+**绝不写**回真理文件——projection 是单向只读派生。一行 view 通常 < 800 字符，比原始文件压缩 5-10 倍。
+
+不触发条件就走原表 §2 装 raw 文件——projection 是预算紧时的备用通道，不是默认路径。
+
 #### 5. 写入 runtime 工件
 
 把三份产物写到：

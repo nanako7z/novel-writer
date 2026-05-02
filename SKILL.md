@@ -122,6 +122,10 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "看一下当前进度 / status" | `python scripts/status.py [--book <bookDir>] [--chapters]`（默认列所有书） |
 | "环境体检 / doctor / 看下 SKILL 是否完整" | `python scripts/doctor.py [--book <bookDir>]`（self-test 12 个脚本 + templates 完整性 + 可选 book 子树校验） |
 | "看下 token 用量 / 字数曲线 / 通过率 / analytics" | `python scripts/analytics.py --book <bookDir> [--chapters] [--detection]` |
+| "上次写到一半崩了 / 看下是不是有半成品 / recover" | `python scripts/recover_chapter.py --book <bookDir> [--clean]`（识别 runtime/ 残留 + 推荐续接点） |
+| "导出 / 出版 / 打包成 epub/txt/md" | `python scripts/export_book.py --book <bookDir> --format txt\|md\|epub [--include-summary]` |
+| "看下跨章疲劳 / 是不是写重复了" | `python scripts/fatigue_scan.py --book <bookDir> --current-chapter N [--window 5]`（advisory） |
+| "节奏 / 爽点压力 / cadence" | `python scripts/cadence_check.py --book <bookDir> --current-chapter N`（Planner 阶段也会自动跑） |
 
 ## 同人 / 风格分支
 
@@ -222,12 +226,17 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── memory-retrieval.md      滑窗记忆算法
 │   ├── foundation-reviewer.md   Architect 5-section 产物的 LLM 审稿闸门
 │   ├── post-write-validation.md 写后检规则与 sentinel parser
+│   ├── long-span-fatigue.md     跨章疲劳 5 类检测
+│   ├── pov-filter.md            POV 可见性三档 + blindspots
+│   ├── cadence-policy.md        4 层节奏模型 + per-genre 默认
+│   ├── chapter-recovery.md      断点续跑识别与推荐
+│   ├── state-projections.md     真理文件压缩视图
 │   └── schemas/                 4 个数据形状
 ├── templates/
 │   ├── inkos.json + book.json   元数据种子
 │   ├── story/{*.md, state/*.json}  真理文件种子
 │   └── genres/                  15 题材 profile（init 时按 --genre 选用）
-├── scripts/                     15 个 Python 脚本
+├── scripts/                     22 个 Python 脚本
 │   ├── init_book.py             创建 books/<id>/ 子树
 │   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook governance）
 │   ├── settler_parse.py         Settler 输出独立 parser（debug 用）
@@ -239,6 +248,13 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── status.py                项目速查（多书 / 单书 / 章节明细）
 │   ├── doctor.py                环境 + 模板 + 脚本自检
 │   ├── analytics.py             token 用量 / 通过率 / 字数曲线 / 钩子活动
+│   ├── fatigue_scan.py          跨章疲劳 5 类检测（advisory）
+│   ├── pov_filter.py            POV 可见性过滤（Composer 单 POV 章节调用）
+│   ├── split_chapter.py         超长章节拆分候选（target × 1.5+ 时入场）
+│   ├── export_book.py           导出 txt / md / epub
+│   ├── recover_chapter.py       断点续跑识别（扫 runtime/ 残留）
+│   ├── cadence_check.py         节奏压力探针（Planner 阶段调）
+│   ├── state_project.py         真理文件 4 类压缩视图
 │   ├── word_count.py            LengthSpec 区间判定
 │   ├── style_analyze.py         5 项纯文本风格统计
 │   ├── ai_tell_scan.py          去 AI 味确定性闸门

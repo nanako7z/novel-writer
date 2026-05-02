@@ -30,9 +30,26 @@ Auditor 进入时必须能读到下列文件 / 上下文：
 - Planner 产物：`ChapterMemo`（goal + body）、`ChapterIntent`（含 mustKeep/mustAvoid/styleEmphasis）
 - Composer 产物：`ContextPackage`（selectedContext）、`RuleStack`（layers/sections/activeOverrides）
 - 确定性闸门结果（在 LLM audit 之前已经跑过）：
-  - `scripts/ai_tell_scan.py` → AI 味 issue 列表
+  - `scripts/ai_tell_scan.py` → 单章 AI 味 issue 列表
+  - `scripts/fatigue_scan.py` → 跨章长跨度疲劳 issue 列表（本章前 N 章窗口扫描，详见 [references/long-span-fatigue.md](../long-span-fatigue.md)）
   - `scripts/sensitive_scan.py` → 三级敏感词命中
   - `scripts/word_count.py` → 章节字数 vs `LengthSpec`（target / softMin / softMax / hardMin / hardMax）
+
+跑 `fatigue_scan.py` 的标准调用：
+
+```bash
+python {SKILL_ROOT}/scripts/fatigue_scan.py \
+  --book <bookDir> --current-chapter N \
+  --window 5 --genre-fatigue-words \
+  [--draft <path-to-current-draft-if-not-yet-on-disk>]
+```
+
+把它返回的 `issues` 列表合并进 audit 的 `issues`：
+- `severity=critical`（连续 4+ 章模式重复 / 同形态冲突堆叠）→ 作为 dim 25（节奏失控）/ dim 26（章节字数 / 标题疲劳）的硬证据，触发 Reviser 的 `polish` 或 `rework` 模式。
+- `severity=warning` → 进 dim 25/26 的旁证，不强制 fail。
+- `severity=info` → 仅记录到 audit summary，不触发任何动作。
+
+跨章疲劳与单章 AI 味是互补关系：`ai_tell_scan` 抓"同一章里 hedge 多 / 转折词重复"，`fatigue_scan` 抓"5 章里同一句式反复 / 同一题材疲劳词反复 / 同一开篇模式连用"。两者的 issue 都进 reviser 的输入，但两者都**不替代**Auditor 对 dim 25/26 的语义判断（节奏感由 LLM 综合）。
 
 ## Process
 

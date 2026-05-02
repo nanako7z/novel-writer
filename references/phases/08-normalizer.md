@@ -113,11 +113,59 @@ Claude 在心中扮演"章节长度修正器"。模式由 `chooseNormalizeMode` 
 
 不需要独立 schema 文件——结构简单。
 
+## 如果是 way over hardMax 的情况
+
+当本章字数 ≥ `target * 1.5`（默认阈值，可调），**不要走 compress 模式**。
+原因：单次压缩要削掉 1500+ 字，几乎一定会损失关键场景或必要伏笔铺垫，
+Normalizer 的"忠实于原意"约束此时形同虚设。
+
+正确做法是**章节分割**——把这一章在自然 seam 处切成 A、B 两章：
+
+1. **先跑分割准备脚本**（确定性，无 LLM）：
+
+   ```bash
+   python {SKILL_ROOT}/scripts/split_chapter.py \
+       --file <draft.md> --target <chapterWords> \
+       [--threshold-multiplier 1.5] [--min-paragraph-distance 5]
+   ```
+
+   脚本输出：
+   - `shouldSplit: false` → 当前字数没到分割阈值，回退到 compress 模式正常处理。
+   - `shouldSplit: true` + `candidates: []` → 没找到干净的段落级 seam；
+     此时降级回 compress 一次（仍然只允许跑一次），并把 warning 标 `"hard-over-without-clean-seam"` 给 Auditor。
+   - `shouldSplit: true` + 候选列表 → 进入下一步。
+
+2. **候选 seam 类型**（按优先级）：
+   - `explicit-divider`：`---` / `***` / `===` 显式分隔行（最高质量）
+   - `time-skip`：段首匹配时间/地点跳转词（"次日"、"三日后"、"回到山门"…）
+   - `pause`：上一段尾部出现长停/沉睡/昏迷/闭关等"呼吸点"
+   - `pov-change`：段首出现一个在前 4 段几乎未出现的人名（启发式）
+   - `scene-break`：上一段以终结标点（"。！？…"）收尾的纯空行边界
+
+   评分综合"seam 质量"和"距离章节中点"。两半都必须 ≥ `target * 0.5`。
+
+3. **把 top 候选交给用户/Claude 决策**，然后人工或 LLM 完成实际切分：
+   - **章 A**：取 seam 之前的内容，给收尾做 cliff polish（让结尾有 cliffhanger / 合适的悬停感，而不是把后半段硬掰掉留下断头）
+   - **章 B**：取 seam 之后的内容作为下一章的 starting draft；Planner
+     需要为它生成一个**新的 chapter_memo**（goal / focus / 不做事项），
+     然后 Writer 走正常流水线（不要直接当成"切下来就发"——后半段往往
+     缺 hook 重申、缺角色铺垫、缺必要的情境交代）。
+
+4. **真理文件影响**：
+   - 章 A 走完整的 Observer/Settler 流水线落 `chapter_summaries.json`。
+   - 章 B 当作"下一章"对待——它也要重跑 Planner → Composer → Writer，
+     不要尝试直接复用章 A 的 OBSERVATIONS/Delta。
+   - `analytics.py` 看到的章数会增加 1，与 `book.json#targetChapters` 的预期偏差用 status 报警。
+
+5. **不要在 Normalizer 阶段做切分**，Normalizer 只能负责"单章字数微调"。
+   切分是结构动作，必须由 Claude 决策 + Planner 重新介入。
+
 ## Failure handling
 
 - **LLM 输出无法清洗出有效正文**（剥除后为空、或仅含 ``` 围栏标记）→ 回退到原始正文，applied=false，warning=`"Normalizer output unparseable, fell back to original."`。
 - **finalCount 比 originalCount 还远离目标**（修反方向了）→ 仍然写回（信任 LLM 一次），但 warning 强制设为 `"Normalizer pass moved further from target ({originalCount} → {finalCount})."`，Auditor 会处理。
 - **绝不递归**：一章只允许 normalizer 一次。再次失控由 Auditor + Reviser（mode=spot-fix 或 polish）接管。
+- **way over hardMax**：不要硬压缩，按上面"如果是 way over hardMax 的情况"分章节。
 
 ## 注意事项
 

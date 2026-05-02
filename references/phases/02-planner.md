@@ -153,6 +153,25 @@ defer:
 
 1. **采集材料**。按 Inputs 顺序读文件；不存在的文件一律视作空（不要伪造内容）。
 1a. **载入上章 Analyzer 反馈**（仅当 `chapterNumber > 1`）：尝试读 `story/runtime/chapter-{N-1}.analysis.json`，按上节"上章 Analyzer 的反馈"规则分流到 hook 账 / 该兑现的 / 不要做 三栏的输入材料中。文件缺失或 `warning === "analyzer-failed"` 即跳过，不阻断。
+1b. **跑 cadence_check**（每章必跑，提早一步看节奏压力）：
+
+  ```bash
+  python {SKILL_ROOT}/scripts/cadence_check.py --book <bookDir> \
+    --current-chapter <chapterNumber> --json
+  ```
+
+  把输出按下表分流进 memo 各段（详见 `references/cadence-policy.md`）：
+
+  | cadence_check 字段 | 进 memo 哪一段 / 怎么处理 |
+  |---|---|
+  | `satisfactionPressure: "high"` | `## 当前任务` 必须直接对应一个 satisfactionType；不允许写"日常 / 整顿 / 走访"这类绵软任务 |
+  | `satisfactionPressure: "medium"` | `## 读者此刻在等什么` 第 2 行强调"本章给一次部分兑现，下章必须完整兑现" |
+  | `volumeBeatStatus` 含 "approaching mid-point" | `## 章尾必须发生的改变` 至少含一条**方向级**改变（信息 / 关系 / 权力，不只是位置/物品）|
+  | `volumeBeatStatus` 含 "climax window" | 同上；优先 `权力改变` 类项 |
+  | `recommendedChapterTypes[0]` | memo frontmatter 隐含建议（让 Writer §14 PRE_WRITE_CHECK 做 default chapterType）|
+  | `pacingNotes` 含 "transitional dominant" | `## 不要做` 加一条："本章不要再写过渡 / 日常段，必须有冲突或决策" |
+
+  这些是**软建议**——`current_focus.md` 或 hook 账上的硬约束可以否决。脚本失败（IO 错误）→ 跳过本步，不阻断。
 2. **筛 stale hooks**：扫 `story/state/hooks.json`，挑出 `status ∈ {pressured, near_payoff}` 且 `chapterNumber - lastAdvancedChapter >= 5` 的 hook，作为「必须本章处理」清单注入用户消息。
 3. **判定 isGoldenOpening**：`chapterNumber <= 3` → true，并附加黄金三章指引段（见下文）。
 4. **拼装用户消息**。按 inkos `PLANNER_MEMO_USER_TEMPLATE` 的 7 段结构填模板：brief_block / 上一章最后一屏 / 最近 3 章摘要 / 当前 arc / 主角行 / 对手行 / 协作者行 / 相关 thread / 必须回收的陈旧 hook / 卷外约束。
