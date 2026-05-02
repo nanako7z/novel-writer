@@ -112,8 +112,11 @@ def pov_present_chapters(
 def parse_chapter_summaries(book_dir: Path) -> list[dict]:
     """Try state/chapter_summaries.json then chapter_summaries.md table."""
     js = load_json(book_dir / "story" / "state" / "chapter_summaries.json", None)
-    if isinstance(js, dict) and isinstance(js.get("summaries"), list):
-        return js["summaries"]
+    # inkos `rows` / legacy SKILL `summaries` — read both.
+    if isinstance(js, dict):
+        for key in ("rows", "summaries"):
+            if isinstance(js.get(key), list):
+                return js[key]
     if isinstance(js, list):
         return js
     md = load_text(book_dir / "story" / "chapter_summaries.md")

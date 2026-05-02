@@ -435,11 +435,13 @@ def main() -> int:
         return 1
 
     state = book / "story" / "state"
-    summaries_obj = load_json(state / "chapter_summaries.json", {"summaries": []})
+    summaries_obj = load_json(state / "chapter_summaries.json", {"rows": []})
     hooks_obj = load_json(state / "hooks.json", {"hooks": []})
-    current_state = load_json(state / "current_state.json", {"facts": []})
+    current_state = load_json(state / "current_state.json", {"chapter": 0, "facts": []})
 
-    summaries = summaries_obj.get("summaries", []) if isinstance(summaries_obj, dict) else []
+    # inkos `rows` / legacy SKILL `summaries` — read both.
+    summaries = (summaries_obj.get("rows", summaries_obj.get("summaries", []))
+                 if isinstance(summaries_obj, dict) else [])
     hooks = hooks_obj.get("hooks", []) if isinstance(hooks_obj, dict) else []
 
     # Resolve memo-derived window defaults (CLI > memo > default).

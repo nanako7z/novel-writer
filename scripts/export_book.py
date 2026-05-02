@@ -75,7 +75,8 @@ def load_summaries(book_dir: Path) -> dict[int, str]:
     except Exception:
         return {}
     out: dict[int, str] = {}
-    rows = obj.get("summaries") if isinstance(obj, dict) else None
+    # inkos `rows` / legacy SKILL `summaries` — read both.
+    rows = obj.get("rows", obj.get("summaries")) if isinstance(obj, dict) else None
     if not isinstance(rows, list):
         return {}
     for row in rows:

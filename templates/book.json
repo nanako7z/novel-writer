@@ -8,7 +8,5 @@
   "chapterWordCount": {{chapterWords}},
   "language": "{{lang}}",
   "createdAt": "{{createdAt}}",
-  "updatedAt": "{{createdAt}}",
-  "fanficMode": null,
-  "parentBookId": null
+  "updatedAt": "{{createdAt}}"
 }

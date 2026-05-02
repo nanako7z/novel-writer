@@ -121,27 +121,52 @@ def append_text(p: Path, text: str) -> None:
     atomic_write_text(p, existing + text + ("\n" if not text.endswith("\n") else ""))
 
 
-def ensure_schema_version(obj: dict, file_label: str, warnings: list[str]) -> dict:
-    """Auto-fill / sanity-check the top-level `schemaVersion` field.
+def ensure_manifest_schema_version(obj: dict, warnings: list[str]) -> dict:
+    """Stamp / sanity-check `schemaVersion` on **manifest only** (inkos parity).
 
-    * Missing → fill with SCHEMA_VERSION (no warning; first-time migration of
-      a pre-versioned file is silent and forward-compatible).
-    * Present + matches  → no-op.
-    * Present + mismatch → keep the existing value untouched (we don't auto-
-      migrate), but emit a warning to the apply_delta JSON output so the
-      caller knows a migration is overdue.
+    Per inkos's StateManifestSchema, schemaVersion is a number (`z.literal(2)`).
+    Older novel-writer books may have it as the string ``"1.0"`` — we
+    self-heal those silently, write back the number, and log a one-time
+    migration warning.
 
-    The dict is mutated in place AND returned for fluent chaining.
+    * Missing → fill with current SCHEMA_VERSION.
+    * Present as string ``"1.0"`` (legacy SKILL format) → migrate to ``2``,
+      warn once.
+    * Present as another string / number → keep existing untouched, warn so
+      caller knows there's a version mismatch.
     """
     if not isinstance(obj, dict):
         return obj
     cur = obj.get("schemaVersion")
     if cur is None:
         obj["schemaVersion"] = SCHEMA_VERSION
+    elif cur == "1.0":
+        obj["schemaVersion"] = SCHEMA_VERSION
+        warnings.append(
+            "manifest schemaVersion migrated '1.0' → 2 (inkos parity); "
+            "see references/schemas/migration-log.md"
+        )
     elif cur != SCHEMA_VERSION:
         warnings.append(
-            f"schemaVersion mismatch in {file_label}: file={cur!r} "
+            f"manifest schemaVersion mismatch: file={cur!r} "
             f"current={SCHEMA_VERSION!r} — see references/schemas/migration-log.md"
+        )
+    return obj
+
+
+def strip_legacy_schema_version(obj: dict, file_label: str, warnings: list[str]) -> dict:
+    """Remove a stray ``schemaVersion`` field from non-manifest state files.
+
+    inkos's HooksStateSchema / CurrentStateStateSchema / ChapterSummariesStateSchema
+    don't carry schemaVersion — only the manifest does. Older novel-writer
+    books had it on every dict-shaped state file; on next write we strip
+    it for cleanliness so inkos's strict zod accepts the file.
+    """
+    if isinstance(obj, dict) and "schemaVersion" in obj:
+        old = obj.pop("schemaVersion")
+        warnings.append(
+            f"stripped legacy schemaVersion={old!r} from {file_label} "
+            "(inkos schema doesn't carry it on this file)"
         )
     return obj
 
@@ -585,35 +610,45 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
 
     if "currentStatePatch" in delta:
         cs_p = state_dir / "current_state.json"
-        cur = load_json(cs_p, {"schemaVersion": SCHEMA_VERSION, "facts": []})
+        cur = load_json(cs_p, {"chapter": 0, "facts": []})
         if not isinstance(cur, dict):
-            cur = {"facts": []}
-        ensure_schema_version(cur, "current_state.json", warnings)
+            cur = {"chapter": 0, "facts": []}
+        strip_legacy_schema_version(cur, "current_state.json", warnings)
         merge_dict(cur, delta["currentStatePatch"])
-        # currentStatePatch could theoretically clobber schemaVersion; re-assert.
-        ensure_schema_version(cur, "current_state.json", warnings)
+        # Inkos's CurrentStateStateSchema requires top-level `chapter` field.
+        ch = delta.get("chapter")
+        if isinstance(ch, int):
+            cur["chapter"] = ch
+        cur.setdefault("chapter", 0)
+        cur.setdefault("facts", [])
         write_json(cs_p, cur)
         modified.append(str(cs_p))
 
     if "hookOps" in delta:
         hp = state_dir / "hooks.json"
-        cur = load_json(hp, {"schemaVersion": SCHEMA_VERSION, "hooks": []})
+        cur = load_json(hp, {"hooks": []})
         if not isinstance(cur, dict):
             cur = {"hooks": []}
-        ensure_schema_version(cur, "hooks.json", warnings)
+        strip_legacy_schema_version(cur, "hooks.json", warnings)
         new_obj = apply_hook_ops(cur, delta["hookOps"], warnings)
-        # apply_hook_ops returns {"hooks": [...]} — preserve schemaVersion.
-        ensure_schema_version(new_obj, "hooks.json", warnings)
+        # apply_hook_ops returns {"hooks": [...]}; nothing else to preserve.
         write_json(hp, new_obj)
         modified.append(str(hp))
 
     if "chapterSummary" in delta:
         sp = state_dir / "chapter_summaries.json"
-        cur = load_json(sp, {"schemaVersion": SCHEMA_VERSION, "summaries": []})
+        cur = load_json(sp, {"rows": []})
         if not isinstance(cur, dict):
-            cur = {"summaries": []}
-        ensure_schema_version(cur, "chapter_summaries.json", warnings)
-        cur.setdefault("summaries", []).append(delta["chapterSummary"])
+            cur = {"rows": []}
+        strip_legacy_schema_version(cur, "chapter_summaries.json", warnings)
+        # Backward-read: legacy SKILL books had `summaries:` wrapper; migrate
+        # to inkos's `rows:` on first write.
+        if "summaries" in cur and "rows" not in cur:
+            cur["rows"] = cur.pop("summaries")
+            warnings.append(
+                "chapter_summaries.json: migrated wrapper key 'summaries' → 'rows' (inkos parity)"
+            )
+        cur.setdefault("rows", []).append(delta["chapterSummary"])
         write_json(sp, cur)
         modified.append(str(sp))
 

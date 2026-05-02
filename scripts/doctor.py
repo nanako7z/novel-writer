@@ -284,48 +284,57 @@ def check_book(book_dir: Path) -> list[dict]:
     else:
         out.append(make("hooks.json", "warning", "missing"))
 
-    # state schema version: every dict-shaped state file should carry the
-    # current `schemaVersion`. Missing is a warning (pre-versioned book —
-    # next apply_delta will auto-fill); mismatch is also a warning (migration
-    # owed); fail only if the file exists but is unreadable as JSON.
-    sv_missing: list[str] = []
-    sv_mismatch: list[tuple[str, str]] = []
-    sv_unreadable: list[str] = []
-    sv_present_ok = 0
-    for rel in STATE_FILES_WITH_VERSION:
-        sp = book_dir / rel
-        if not sp.is_file():
-            continue  # already covered by other checks
+    # manifest schema version: only the manifest carries `schemaVersion` per
+    # inkos's StateManifestSchema. Other state files are versioned implicitly
+    # by the manifest in the same book.
+    manifest_p = state_dir / "manifest.json"
+    if manifest_p.is_file():
         try:
-            sd = json.loads(sp.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            sv_unreadable.append(rel)
-            continue
-        if not isinstance(sd, dict):
-            sv_unreadable.append(rel)
-            continue
-        cur = sd.get("schemaVersion")
-        if cur is None:
-            sv_missing.append(rel)
-        elif cur != SCHEMA_VERSION:
-            sv_mismatch.append((rel, str(cur)))
-        else:
-            sv_present_ok += 1
-    if sv_unreadable:
-        out.append(make("state schema version", "fail",
-                        f"unreadable: {', '.join(sv_unreadable)}"))
-    elif sv_mismatch:
-        bits = [f"{rel}={cur!r}" for rel, cur in sv_mismatch]
-        out.append(make("state schema version", "warning",
-                        f"mismatch (current={SCHEMA_VERSION!r}): {', '.join(bits)}; "
-                        "see references/schemas/migration-log.md"))
-    elif sv_missing:
-        out.append(make("state schema version", "warning",
-                        f"missing in: {', '.join(sv_missing)} "
-                        f"(expected {SCHEMA_VERSION!r}; next apply_delta will auto-fill)"))
+            md = json.loads(manifest_p.read_text(encoding="utf-8"))
+            if not isinstance(md, dict):
+                out.append(make("manifest schema version", "fail",
+                                "manifest.json is not a JSON object"))
+            else:
+                cur = md.get("schemaVersion")
+                if cur is None:
+                    out.append(make("manifest schema version", "warning",
+                                    f"missing (expected {SCHEMA_VERSION!r}; "
+                                    "next apply_delta will auto-fill)"))
+                elif cur == "1.0":
+                    out.append(make("manifest schema version", "warning",
+                                    f"legacy '1.0' (string); next write migrates to {SCHEMA_VERSION!r}; "
+                                    "see references/schemas/migration-log.md"))
+                elif cur != SCHEMA_VERSION:
+                    out.append(make("manifest schema version", "warning",
+                                    f"mismatch: file={cur!r} current={SCHEMA_VERSION!r}; "
+                                    "see references/schemas/migration-log.md"))
+                else:
+                    out.append(make("manifest schema version", "ok",
+                                    f"{cur} (matches inkos)"))
+        except json.JSONDecodeError as e:
+            out.append(make("manifest schema version", "fail", f"unreadable: {e}"))
+
+    # Cross-validate non-manifest state files don't carry stray schemaVersion
+    # (older SKILL books did; on next write they'll be stripped).
+    stray = []
+    for rel in ("story/state/hooks.json",
+                "story/state/current_state.json",
+                "story/state/chapter_summaries.json"):
+        sp = book_dir / rel
+        if sp.is_file():
+            try:
+                sd = json.loads(sp.read_text(encoding="utf-8"))
+                if isinstance(sd, dict) and "schemaVersion" in sd:
+                    stray.append(rel)
+            except json.JSONDecodeError:
+                pass  # other checks will report it
+    if stray:
+        out.append(make("state files inkos-clean", "warning",
+                        f"stray schemaVersion in: {', '.join(stray)} "
+                        "(legacy SKILL format; next apply_delta strips it)"))
     else:
-        out.append(make("state schema version", "ok",
-                        f"{sv_present_ok}/{len(STATE_FILES_WITH_VERSION)} at {SCHEMA_VERSION!r}"))
+        out.append(make("state files inkos-clean", "ok",
+                        "no stray schemaVersion in non-manifest state files"))
 
     # genre profile resolves
     if book is not None:

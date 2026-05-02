@@ -1,5 +1,7 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": 2,
   "language": "{{lang}}",
-  "lastAppliedChapter": 0
+  "lastAppliedChapter": 0,
+  "projectionVersion": 1,
+  "migrationWarnings": []
 }

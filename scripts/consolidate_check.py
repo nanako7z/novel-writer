@@ -91,9 +91,11 @@ def read_volume_map(book_dir: Path) -> str:
 def detect(book_dir: Path, threshold: int) -> dict[str, Any]:
     summaries_obj = load_json(
         book_dir / "story" / "state" / "chapter_summaries.json",
-        {"summaries": []},
+        {"rows": []},
     )
-    summaries = summaries_obj.get("summaries", []) if isinstance(summaries_obj, dict) else []
+    # inkos `rows` / legacy SKILL `summaries` — read both.
+    summaries = (summaries_obj.get("rows", summaries_obj.get("summaries", []))
+                 if isinstance(summaries_obj, dict) else [])
     total_chapters = len(summaries)
 
     manifest = load_json(book_dir / "story" / "state" / "manifest.json", {})

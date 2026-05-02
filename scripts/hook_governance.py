@@ -474,8 +474,13 @@ def cmd_validate(book_dir: Path, current_chapter: int | None) -> dict:
     hooks: list[dict] = list(hooks_obj.get("hooks", []) or [])
 
     summaries_obj = load_json(state_dir / "chapter_summaries.json",
-                              {"summaries": []})
-    summaries = (summaries_obj or {}).get("summaries", []) if isinstance(summaries_obj, dict) else []
+                              {"rows": []})
+    # inkos `rows` / legacy SKILL `summaries` — read both.
+    if isinstance(summaries_obj, dict):
+        summaries = (summaries_obj or {}).get("rows",
+                                              (summaries_obj or {}).get("summaries", []))
+    else:
+        summaries = []
 
     issues: list[dict] = []
 

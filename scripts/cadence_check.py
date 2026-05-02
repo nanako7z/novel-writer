@@ -867,9 +867,11 @@ def diagnose(
     profile = parse_genre_profile(book_dir, skill_root)
     summaries_obj = load_json(
         book_dir / "story" / "state" / "chapter_summaries.json",
-        {"summaries": []},
+        {"rows": []},
     )
-    summaries = summaries_obj.get("summaries", []) if isinstance(summaries_obj, dict) else []
+    # inkos `rows` / legacy SKILL `summaries` — read both.
+    summaries = (summaries_obj.get("rows", summaries_obj.get("summaries", []))
+                 if isinstance(summaries_obj, dict) else [])
 
     volume_map_path = book_dir / "story" / "outline" / "volume_map.md"
     volume_raw = read_text(volume_map_path)

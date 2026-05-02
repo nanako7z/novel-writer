@@ -509,8 +509,10 @@ def main() -> int:
         return 1
 
     summaries_obj = load_json(book / "story" / "state" / "chapter_summaries.json",
-                              {"summaries": []})
-    summaries = summaries_obj.get("summaries", []) if isinstance(summaries_obj, dict) else []
+                              {"rows": []})
+    # inkos `rows` / legacy SKILL `summaries` — read both.
+    summaries = (summaries_obj.get("rows", summaries_obj.get("summaries", []))
+                 if isinstance(summaries_obj, dict) else [])
     hooks_obj = load_json(book / "story" / "state" / "hooks.json", {"hooks": []})
     hooks = hooks_obj.get("hooks", []) if isinstance(hooks_obj, dict) else []
 

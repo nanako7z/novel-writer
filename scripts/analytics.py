@@ -182,9 +182,10 @@ def compute_book_analytics(book_dir: Path, *, with_chapters: bool,
     soft_max = int(round(target_per_chapter * 1.15)) if target_per_chapter else 0
 
     # Index summaries by chapter number.
+    # inkos uses `rows` wrapper; legacy SKILL books used `summaries`. Read both.
     summaries_obj = _safe_load_json(state_dir / "chapter_summaries.json",
-                                    {"summaries": []}) or {}
-    summaries = (summaries_obj.get("summaries", [])
+                                    {"rows": []}) or {}
+    summaries = (summaries_obj.get("rows", summaries_obj.get("summaries", []))
                  if isinstance(summaries_obj, dict) else [])
     summary_by_ch: dict[int, dict] = {}
     if isinstance(summaries, list):

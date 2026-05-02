@@ -190,8 +190,10 @@ def collect_summary(book_dir: Path, *, deep: bool = False) -> dict:
         out["hookCount"] = {"active": active, "stale": stale, "resolved": resolved}
 
         # recent 3 chapter titles from chapter_summaries.json
-        sums_obj = _load_json(state_dir / "chapter_summaries.json", {"summaries": []}) or {}
-        sums = sums_obj.get("summaries", []) if isinstance(sums_obj, dict) else []
+        # inkos `rows` / legacy SKILL `summaries` — read both.
+        sums_obj = _load_json(state_dir / "chapter_summaries.json", {"rows": []}) or {}
+        sums = (sums_obj.get("rows", sums_obj.get("summaries", []))
+                if isinstance(sums_obj, dict) else [])
         rows: list[dict] = []
         if isinstance(sums, list):
             for r in sums:
@@ -668,7 +670,7 @@ def cmd_copy(args: argparse.Namespace) -> int:
             _atomic_write_json(mp, mf)
             # chapter_summaries -> empty
             csp = state_dir / "chapter_summaries.json"
-            _atomic_write_json(csp, {"summaries": []})
+            _atomic_write_json(csp, {"rows": []})
             # hooks -> drop lastAdvancedChapter on each hook (fresh advancement
             # tracking) but preserve hook content as a setup template
             hp = state_dir / "hooks.json"

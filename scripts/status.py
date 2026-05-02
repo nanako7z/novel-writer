@@ -142,8 +142,10 @@ def collect_book_stats(book_dir: Path, *, with_chapters: bool) -> dict:
                 index_by_ch[row["number"]] = row
 
     summaries_obj = _safe_load_json(state_dir / "chapter_summaries.json",
-                                    {"summaries": []}) or {}
-    summaries = summaries_obj.get("summaries", []) if isinstance(summaries_obj, dict) else []
+                                    {"rows": []}) or {}
+    # inkos `rows` / legacy SKILL `summaries` — read both.
+    summaries = (summaries_obj.get("rows", summaries_obj.get("summaries", []))
+                 if isinstance(summaries_obj, dict) else [])
     summary_by_ch: dict[int, dict] = {}
     if isinstance(summaries, list):
         for row in summaries:
