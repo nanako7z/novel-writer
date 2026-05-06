@@ -265,6 +265,51 @@ def _bump_book_metadata(book_dir: Path, chapter_no: int | None) -> dict:
     }
 
 
+def _advance_manifest_chapter(
+    book_dir: Path, delta_chapter: int | None, warnings: list[str]
+) -> dict:
+    """Mirror inkos `state-reducer.ts:64-67` — pin
+    ``manifest.lastAppliedChapter = delta.chapter`` after a successful apply.
+
+    Refuses to go backwards (inkos throws on
+    ``delta.chapter <= lastAppliedChapter``; apply_delta is more permissive
+    and warns + skips instead). Re-applying the same chapter is a no-op.
+    """
+    if not isinstance(delta_chapter, int):
+        return {"ran": False, "reason": "delta has no top-level chapter field"}
+    mp = book_dir / "story" / "state" / "manifest.json"
+    if not mp.is_file():
+        return {"ran": False, "reason": f"manifest.json not found at {mp}"}
+    try:
+        manifest = json.loads(mp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return {"ran": False, "reason": f"manifest.json unreadable: {e!r}"}
+    if not isinstance(manifest, dict):
+        return {"ran": False, "reason": "manifest.json is not a JSON object"}
+
+    before = int(manifest.get("lastAppliedChapter", 0) or 0)
+    if delta_chapter < before:
+        warnings.append(
+            f"manifest advance skipped: delta.chapter={delta_chapter} < "
+            f"lastAppliedChapter={before} (inkos refuses going backwards)"
+        )
+        return {"ran": False, "before": before, "reason": "delta goes backwards"}
+    if delta_chapter == before:
+        return {
+            "ran": False,
+            "before": before,
+            "reason": f"already at lastAppliedChapter={before} (no-op re-apply)",
+        }
+
+    ensure_manifest_schema_version(manifest, warnings)
+    manifest["lastAppliedChapter"] = delta_chapter
+    try:
+        write_json(mp, manifest)
+    except OSError as e:
+        return {"ran": False, "reason": f"write failed: {e!r}"}
+    return {"ran": True, "before": before, "after": delta_chapter}
+
+
 def md_row(values: list) -> str:
     return "| " + " | ".join(str(v) if v is not None else "" for v in values) + " |"
 
@@ -720,6 +765,8 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
             warnings.append(f"hook_governance validate failed: {validate_out.get('error')}")
 
     # ── book.json metadata maintenance (mirrors inkos markBookActiveIfNeeded) ──
+    chapter_no = delta.get("chapter") if isinstance(delta, dict) else None
+    chapter_no = chapter_no if isinstance(chapter_no, int) else None
     if args.skip_book_metadata or governance_blocked:
         # Skip when explicitly disabled, or when governance refused to commit
         # (status flip / updatedAt bump should only fire on a real successful write).
@@ -730,12 +777,23 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
             else "skipped due to hookGovernanceBlocked",
         }
     else:
-        chapter_no = delta.get("chapter") if isinstance(delta, dict) else None
         try:
-            book_metadata = _bump_book_metadata(book, chapter_no if isinstance(chapter_no, int) else None)
+            book_metadata = _bump_book_metadata(book, chapter_no)
         except Exception as e:  # noqa: BLE001
             book_metadata = {"ran": False, "reason": f"unexpected: {e!r}"}
             warnings.append(f"book metadata bump failed: {e!r}")
+
+    # ── manifest.lastAppliedChapter advance (mirrors inkos state-reducer.ts:64-67) ──
+    if governance_blocked:
+        manifest_advance = {"ran": False, "reason": "skipped due to hookGovernanceBlocked"}
+    else:
+        try:
+            manifest_advance = _advance_manifest_chapter(book, chapter_no, warnings)
+        except Exception as e:  # noqa: BLE001
+            manifest_advance = {"ran": False, "reason": f"unexpected: {e!r}"}
+            warnings.append(f"manifest advance failed: {e!r}")
+        if manifest_advance.get("ran"):
+            modified.append(str(book / "story" / "state" / "manifest.json"))
 
     print(json.dumps({
         "ok": True,
@@ -749,6 +807,7 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         "hookGovernance": governance_report,
         "hookGovernanceBlocked": governance_blocked,
         "bookMetadata": book_metadata,
+        "manifestAdvance": manifest_advance,
     }, ensure_ascii=False, indent=2))
     chapter_label = "?"
     if isinstance(delta, dict):
