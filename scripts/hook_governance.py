@@ -455,7 +455,7 @@ def parse_pending_hooks_md(path: Path) -> list[str]:
             if not c:
                 continue
             # skip header
-            if c.lower() in ("hookid", "hook id", "id", "伏笔", "伏笔id"):
+            if c.lower() in ("hookid", "hook_id", "hook id", "id", "伏笔", "伏笔id"):
                 break
             # plausible id: alnum / underscore / dash / CJK
             if re.fullmatch(r"[A-Za-z0-9_\-一-鿿]{1,40}", c):
