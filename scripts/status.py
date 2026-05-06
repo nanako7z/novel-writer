@@ -27,6 +27,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _chapter_files import CHAPTER_NAME_RE, all_chapter_files  # noqa: E402
+
 
 # --------------------------- discovery -------------------------------------
 
@@ -85,8 +88,6 @@ def resolve_counting_mode(book: dict) -> str:
 
 # --------------------------- per-book stats --------------------------------
 
-CHAPTER_NAME_RE = re.compile(r"^(\d{4})\.md$")
-
 
 def _safe_load_json(p: Path, default: Any) -> Any:
     if not p.is_file():
@@ -105,18 +106,6 @@ def _iso_mtime(path: Path) -> str | None:
     return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).isoformat()
 
 
-def list_chapter_files(book_dir: Path) -> list[Path]:
-    chap_dir = book_dir / "chapters"
-    if not chap_dir.is_dir():
-        return []
-    files: list[Path] = []
-    for f in chap_dir.iterdir():
-        if f.is_file() and CHAPTER_NAME_RE.match(f.name):
-            files.append(f)
-    files.sort(key=lambda p: p.name)
-    return files
-
-
 def collect_book_stats(book_dir: Path, *, with_chapters: bool) -> dict:
     book = _safe_load_json(book_dir / "book.json", {}) or {}
     state_dir = book_dir / "story" / "state"
@@ -128,7 +117,7 @@ def collect_book_stats(book_dir: Path, *, with_chapters: bool) -> dict:
     chapter_word_count = int(book.get("chapterWordCount", 0) or 0)
     counting_mode = resolve_counting_mode(book)
 
-    chapter_files = list_chapter_files(book_dir)
+    chapter_files = all_chapter_files(book_dir)
     total_chapters = len(chapter_files)
 
     # Per-chapter status: prefer chapters/index.json (operational index) when
