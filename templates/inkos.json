@@ -1,0 +1,19 @@
+{
+  "name": "{{projectName}}",
+  "version": "0.1.0",
+  "language": "{{lang}}",
+  "llm": {
+    "provider": "anthropic",
+    "service": "claude-code",
+    "configSource": "env",
+    "baseUrl": "https://api.anthropic.com",
+    "apiKey": "",
+    "model": "claude-sonnet-4-5",
+    "temperature": 0.7,
+    "thinkingBudget": 0,
+    "apiFormat": "chat",
+    "stream": true
+  },
+  "notify": [],
+  "inputGovernanceMode": "v2"
+}

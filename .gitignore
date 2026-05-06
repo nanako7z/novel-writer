@@ -3,7 +3,7 @@
 
 # ── 用户实际写的书：默认放本仓库外，但若有人在 repo 内 init 也别传 ──
 books/
-inkos.json
+/inkos.json
 .env
 .env.*
 !.env.example
