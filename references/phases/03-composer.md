@@ -84,7 +84,7 @@ retrievalHints = [memo.goal, memo.outlineNode, ...memo.threadRefs].filter(truthy
 | 8    | `story/fanfic_canon.md`             | Preserve extracted fanfic canon constraints.                                    | 首段                                                                    |
 | 9    | `memory_retrieve#recent_titles`     | Avoid repetitive chapter naming.                                                | `recentSummaries` 末 5 条的 `chapter: title` 用 ` \| ` 拼接                |
 | 10   | `memory_retrieve#recent_mood_type_trail` | Mood / chapterType cadence visibility.                                     | `recentSummaries` 末 5 条的 `chapter: mood / chapterType` 拼接             |
-| 11   | `story/chapters#recent_endings`     | Show how recent chapters ended (avoid 3 连续 collapse endings).                  | 最近 3 章末句各取最后一句（>60 字截断为 57 字 + "..."）                          |
+| 11   | `story/chapters#recent_endings`     | Show how recent chapters ended (avoid 3 连续 collapse endings).                  | 最近 3 章末句各取最后一句（>60 字截断为 57 字 + "..."）。**已写章数 < 2 时整行跳过**——单章趋势是错觉，会让 Writer 误判 cadence（参 inkos `composer.ts` L288 minimum-threshold 检查）。 |
 | 12   | `runtime/hook_debt#<hookId>`        | Narrative debt brief with original seed text.                                   | 对每个 `memo.threadRefs` 中存在于 `activeHooks` 的 hookId，渲染下方"hook debt 简报" |
 | 13   | `memory_retrieve#facts`             | Relevant current-state fact retrieved.                                          | `currentState.facts` 中与 hint 匹配的硬事实行                                 |
 | 14   | `memory_retrieve#relevant_summaries` | Relevant episodic memory（events-only）.                                       | `relevantSummaries`（脚本已按 character/hook 重叠筛选并截到 events）             |
@@ -110,22 +110,61 @@ retrievalHints = [memo.goal, memo.outlineNode, ...memo.threadRefs].filter(truthy
 
 下层覆盖上层。冲突时以 L4 → L3 → L2 → L1 顺序裁决；同级冲突保留两条让 Writer 自己解（罕见，应在 Planner 阶段就压平）。
 
+##### overrideEdges + activeOverrides schema（搬自 inkos `models/input-governance.ts` + `utils/context-assembly.ts#buildGovernedRuleStack`）
+
+下游 Writer / Continuity / Reviser 三个 prompt 都直接渲染 `ruleStack.activeOverrides`——告诉模型本章哪些上层规则被章级覆写、为什么。这两个数组是 ruleStack 的硬 schema，不能省：
+
+```ts
+overrideEdges: [
+  { from: "L4", to: "L3", allowed: true,  scope: "chapter" },  // 章级 mustAvoid / styleEmphasis 可压 L3
+  { from: "L4", to: "L2", allowed: false, scope: "chapter" },  // 不能压全书铁律
+  { from: "L4", to: "L1", allowed: false, scope: "chapter" },  // 不能压题材底色
+  { from: "L3", to: "L2", allowed: false, scope: "book"    },  // chapter_memo 不能压 book_rules
+  { from: "L3", to: "L1", allowed: false, scope: "book"    },
+  { from: "L2", to: "L1", allowed: false, scope: "book"    },
+]
+activeOverrides: [
+  // 由 planner.intent.mustAvoid / styleEmphasis 生成；reason 字段被 truncate 到 ≤ 200 chars
+  { from: "L4", to: "L3", target: "chapter:12/mustAvoid",     reason: "本章不要触碰师叔死因（留给第 14 章）" },
+  { from: "L4", to: "L3", target: "chapter:12/styleEmphasis", reason: "强化战斗节奏，弱化心理描写" },
+]
+```
+
+**Override edge 规则**（硬尺，不能违反）：
+
+- L4 章级覆写**只能**压 L3 章节规则，禁止跨级压 L2 / L1（书铁律 / 题材规则不能因为单章方便就破）
+- L3 章节规则**不能**压 L2 / L1
+- L2 全书规则**不能**压 L1 题材规则
+
+**activeOverrides 来源**：planner 在 `chapter_memo` 里通过 `## 当前任务` / 章 frontmatter 的 `styleEmphasis` / `current_focus.md` 的 `mustAvoid` 段产出 `plan.intent.mustAvoid[]` + `plan.intent.styleEmphasis[]`，Composer 把每条转成 `{from:"L4", to:"L3", target:"chapter:N/<kind>", reason:<truncated>}` 写入 activeOverrides[]。`reason` 字段超过 200 chars 必须按 inkos `truncateForOverrideReason` 截断（保末尾`…`），避免 context 膨胀。
+
+> **下游消费点**：Writer system prompt（参 inkos `writer.ts` ~L820/L900 governed-mode 段）渲染 `activeOverrides` 为"本章覆写的规则"列表块；Continuity（auditor）和 Reviser 也读这个数组——所以 Composer 这一步落空，三个下游 prompt 都拿不到本章的覆写信号。
+
 #### 4. 构建 chapterTrace（审计追踪）
 
-记录本次 Composer 的输入指纹：
+记录本次 Composer 的输入指纹。**所有路径字段都是数组**，不是 scalar——每个数组项是一个真理文件路径（或 selectedContext 的 source 字段值）。schema 对齐 inkos `models/input-governance.ts#ChapterTraceSchema`：
 
 ```yaml
 chapter: 12
-plannerMemoPath: story/runtime/chapter_memo.md
-contextSources:
+plannerInputs:                        # 数组：planner 当时读了哪些文件（来自 plan.plannerInputs）
+  - story/runtime/chapter_memo.md
+  - story/outline/volume_map.md
+  - story/state/current_state.json
+  - story/pending_hooks.md
+composerInputs:                       # 数组：Composer 自己拼包时读了哪些文件
+  - story/runtime/chapter_memo.md
+  - story/outline/story_frame.md
+  - story/state/hooks.json
+selectedSources:                      # 数组：contextPackage.selectedContext 每条的 source 字段
   - story/current_state.md
   - story/outline/story_frame.md
-  - ...
+  - genre_profiles/xianxia.md
 ruleStackLayers: [L1, L2, L3, L4]
-composerInputs:
-  - story/runtime/chapter_memo.md
+notes: []                             # 可选：composer 的诊断备注（截断后的 override reason 等）
 generatedAt: <ISO timestamp>
 ```
+
+> **不要**把 `plannerInputs` 写成 `plannerMemoPath` 单值——上游 inkos 已经 schema 化为数组，下游 audit-replay / state-recovery 工具会按数组消费。POV 过滤步骤把 `povChapters` / `relationships` 摘要追加进 `composerInputs`（同名数组的元素），不要塞进嵌套对象。
 
 #### 4.5 POV 过滤（可选）
 

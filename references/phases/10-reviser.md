@@ -147,20 +147,73 @@ else:
 | rework      | 场景推进与冲突组织                                | 部分（保主设定 / 大事件结果） | 否 | 段落可重组 |
 | auto        | 由 system prompt 内 tier 路由——critical 段重写 / warning 段补丁 / info 段保留 | 视 issue 而定 | 否 | 视 issue 而定 |
 
+### Auto 模式系统 prompt（verbatim，搬自 inkos `reviser.ts` L417-453 + L431-448）
+
+`mode == "auto"` 时拼装的系统 prompt 必须包含以下三个 verbatim 段。它们是 Reviser 决定 PATCHES 还是 REVISED_CONTENT、按 tier 路由 issues、按周期相位修稿的硬绑定：
+
+#### 段 A — Routing 分流指令（按 `autoOutputMode` 切换）
+
+| autoOutputMode | 何时进入 | 注入的指令（verbatim） |
+|---|---|---|
+| `rewrite-only` | reviewer 阻塞议题里出现结构 / 语义错（人设崩 / 主线偏 / 爽点缺 / 时间线错 / 伏笔未收 / memo 偏离） | 分流指令：reviewer 报告的阻塞问题属于结构/语义错（**人设崩、主线偏、爽点缺、时间线错、伏笔未收、memo 偏离等**）。你必须输出 REVISED_CONTENT——禁止输出 PATCHES，**这类问题不能靠补丁修复**。如果无法安全重写，在 FIXED_ISSUES 里说明并留空 REVISED_CONTENT。 |
+| `patch-only` | 阻塞议题全是局部错（措辞、段落形状、疲劳词、信息越界、知识污染） | 分流指令：reviewer 报告的阻塞问题属于局部错（**措辞、段落形状、疲劳词、信息越界、知识污染**）。你必须只输出 PATCHES——不要整章改写。如果做不出补丁，留空 PATCHES。 |
+| `allow-full`（默认） | 混合或无明显倾斜 | 不注入分流指令，按 tier 自决 |
+
+> 分流模式由 issue 类目决定（不是用户指定），用 `cmd_auto_route` 在拼 prompt 之前算好。决策表见上方"Critical 类目→分流模式"映射。
+
+#### 段 B — PATCHES vs REVISED_CONTENT 的强约束语（verbatim）
+
+```
+PATCHES — 用于局部文字错（句子级 / 段落级措辞、句式、疲劳词、信息越界、知识污染）。
+  每个 PATCH 引用要修改的原段（一句、一段或多段），并给出替换文本。未触及的文字保持原样。
+
+REVISED_CONTENT — 用于全章级议题（字数压缩、结构重写、节奏重构、主线大对齐）。
+  输出修订后完整正文。**当 Critical 议题包含字数或结构问题时，必须用 REVISED_CONTENT——
+  补丁不能压缩或重构一章**。
+
+如果 Critical 议题同时包含局部错和全章级议题，用 REVISED_CONTENT（一次过完）。
+```
+
+#### 段 C — 修订原则（7 条）+ 周期相位三件套（verbatim）
+
+```
+修订原则：
+1. 治本，不要表面打磨——一处人设崩塌不要靠加形容词盖过去
+2. 保留作者已经做对的东西——只动有问题的段落
+3. 数值/伏笔铁律：数值错误必须精确修正，前后对账（期初 + 增量 = 期末）；
+   伏笔状态变化必须同步更新 hooks
+4. **不要压缩过渡段、不要删掉减速段——它们是节奏的呼吸**。把"水"修成"饵"
+   而不是删掉
+5. 情绪靠动作外化，不靠形容词堆砌
+6. 长度护栏：只有在修复关键问题确实需要时才允许轻微偏离 lengthSpec 的硬区间
+7. 章末钩子是读者留下来的最后一道闸——如果章末被改坏，整章打回
+
+小目标周期修稿三件套（按 chapter_memo 推断的相位决定动作）：
+- **后效相位（aftermath）**：如果本章应该是"后效"阶段但仍在加压，把最密集的冲突
+  段落改写为展示改变的段落——谁失去了什么、谁的态度变了、新的常态是什么
+- **爆发相位（climax）**：如果本章应该是"爆发"阶段但没有明确兑现，找到最接近回报
+  的场景并放大它——让承诺的释放超过读者预期
+- **日常相位（daily / bait）**：日常段落如果不服务主线，改写为"饵"——加入一个
+  指向未来的细节、一句暗示、一个角色反应，把"水"变成种子
+```
+
+英文路径走 inkos `buildAutoSystemPrompt` L417-426（`ROUTING:` / `PATCHES vs REVISED_CONTENT` / `Revision principles` 三段英文 verbatim）。
+
 ### 工作步骤
 
 1. **确定 mode**：用户给了就用，没给按上面决策树挑。
-2. **构造 issueList**：
+2. **mode=auto 时算 autoOutputMode**：扫 issues 类目——若存在结构 / 语义类（人设崩、主线偏、爽点缺、时间线错、伏笔未收、memo 偏离）→ `rewrite-only`；若全是局部错（措辞、段落形状、疲劳词、信息越界、知识污染）→ `patch-only`；混合 → `allow-full`。
+3. **构造 issueList**：
    - mode=auto → 按 severity 分 tier：`## Critical（必须解决）` / `## High（应当改善）` / `## Medium（参考建议）`，每条 `[severity] category: description` + `建议: suggestion`
    - 其余 mode → 平铺一份带 severity 的列表
-3. **拼 system prompt**：
-   - 公共前缀（langPrefix / 题材底色 / 主角人设锁定 / 数值规则 / 长度护栏）
+4. **拼 system prompt**：
+   - 公共前缀（langPrefix / 题材底色 / 主角人设锁定 / 数值规则"前后对账" / 长度护栏）
    - 模式特定段（上方 6 模式定义的对应文本）
-   - mode=auto 时用 `buildAutoSystemPrompt`（按 tier 区别处理 critical / warning / info）
-4. **拼 user message**：附正文 + issues + 资源账本（数值题材）+ 伏笔池 + 关键真理文件 + 章节意图 + memo + 上下文包 + 卷纲 + 角色矩阵 + 章节摘要
-5. **生成修订正文**：以 `=== REVISED_CONTENT ===` 起首的纯文本块（同时可能附 `=== FIXED_ISSUES ===` / `=== PATCHES ===` / `=== UPDATED_STATE ===` / `=== UPDATED_HOOKS ===` 子块；v1 简化为只读 REVISED_CONTENT，其余给 Settler 走 delta 路径）
-6. **写回**：覆盖 `chapters/<NNNN>.md`，并把 issues 与 fix 操作记录到 `story/runtime/revise_log.json`
-7. **回环 Auditor**：跑一次 Auditor，看分数是否提升 ≥ 3；不达阈值或回环已 3 轮 → 退出
+   - mode=auto 时用 `buildAutoSystemPrompt`（必须含上方 段 A / 段 B / 段 C verbatim）
+5. **拼 user message**：附正文 + issues + 资源账本（数值题材）+ 伏笔池 + 关键真理文件 + 章节意图 + memo + 上下文包 + 卷纲 + 角色矩阵 + 章节摘要
+6. **生成修订正文**：以 `=== REVISED_CONTENT ===` 起首的纯文本块（同时可能附 `=== FIXED_ISSUES ===` / `=== PATCHES ===` / `=== UPDATED_STATE ===` / `=== UPDATED_HOOKS ===` 子块；v1 简化为只读 REVISED_CONTENT，其余给 Settler 走 delta 路径）
+7. **写回**：覆盖 `chapters/<NNNN>.md`，并把 issues 与 fix 操作记录到 `story/runtime/revise_log.json`
+8. **回环 Auditor**：跑一次 Auditor，看分数是否提升 ≥ 3；不达阈值或回环已 3 轮 → 退出
 
 ## Output contract
 
