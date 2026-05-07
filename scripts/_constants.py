@@ -92,3 +92,14 @@ LEDGER_VIOLATION_HOOK_PAYOFF_UNLOCATED = "HOOK_PAYOFF_UNLOCATED"
 # in the chapter draft to satisfy commit ab39bd6's "concretely locatable
 # payoff scene" rule. Pure inner-recall is not enough.
 HOOK_PAYOFF_MIN_CHARS = 60
+
+# ---- author-constitution paths (immutable at runtime) ---------------------
+# Files / fields that runtime pipelines (apply_delta direct-Edit guard,
+# doc_ops batch blacklist) must never auto-modify. Single source of truth so
+# new constitution-class state lands in exactly one constant.
+AUTHOR_CONSTITUTION_PATHS: frozenset[str] = frozenset({
+    "story/author_intent.md",
+    "story/fanfic_canon.md",
+    "story/parent_canon.md",
+    "book.json#bookRules",
+})

@@ -341,7 +341,7 @@ upsert 允许出现 header 中尚未存在的列名——doc_ops 会自动扩 he
 | `slug` | string | 文件名 stem（可中文）；映射到 `story/roles/<tier>/<slug>.md`。≤ 80 chars，不含 `/`、控制字符、不以 `.` 开头 |
 | `tier` | enum | `主要角色` / `次要角色`，仅 `create_role` 用；省略默认 `次要角色` |
 | `displayName` | string | 仅 `create_role` 用；写到文件 H1。省略默认与 `slug` 相同 |
-| `initialContent` | string ≤ 4000 chars | 仅 `create_role` 用；省略则用 `templates/story/roles/_template.md` |
+| `initialContent` | string ≤ 4000 chars | 仅 `create_role` 用；省略则用 `references/role-template.md` |
 | `anchor` | string | `patch_role_section` 必填，H2/H3 完整行 |
 | `newContent` | string ≤ 4000 chars | `patch_role_section` 必填 |
 | `newSlug` | string | `rename_role` 必填，文件名规则同 `slug` |

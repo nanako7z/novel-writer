@@ -78,12 +78,15 @@ from _summary import emit_summary  # noqa: E402
 
 TRUTH_MD_FILES = [
     "current_state.md",
-    "particle_ledger.md",
     "pending_hooks.md",
     "chapter_summaries.md",
     "subplot_board.md",
     "emotional_arcs.md",
     "character_matrix.md",
+    # particle_ledger.md is created on-demand by Architect for numerical-system
+    # genres; not shipped in the init template. Snapshot still picks it up if
+    # present (see _enumerate_md below).
+    "particle_ledger.md",
 ]
 
 TRUTH_JSON_FILES = [

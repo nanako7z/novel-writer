@@ -23,9 +23,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _constants import AUTHOR_CONSTITUTION_PATHS  # noqa: E402  — single source of truth
 
 # ──────────────────────────── routing tables ───────────────────────────────
 
@@ -44,13 +48,9 @@ DOC_OPS_WHITELIST: dict[str, str] = {
 
 # Blacklist: paths that NEVER accept docOps writes (author constitution).
 # Keys are book-relative paths; presence of a forbidden top-level key in
-# delta.docOps also triggers schema-fail.
-DOC_OPS_BLACKLIST: frozenset[str] = frozenset({
-    "story/author_intent.md",
-    "story/fanfic_canon.md",
-    "story/parent_canon.md",
-    "book.json#bookRules",
-})
+# delta.docOps also triggers schema-fail. Sourced from _constants so adding
+# a new constitution file lands in one place.
+DOC_OPS_BLACKLIST: frozenset[str] = AUTHOR_CONSTITUTION_PATHS
 
 # Per-target newContent character caps (defense against runaway LLM writes).
 # Keyed by docOps key. RoleFileOp uses ROLE_CAP.
@@ -91,6 +91,25 @@ _CANONICAL_KEY_COLS: dict[str, tuple[str, ...]] = {
     "subplotBoard":    ("subplotId",),
 }
 
+# Legacy header rename map per target. Books created before the *Ops →
+# docOps unification had display-style column names (e.g. "Emotional State")
+# that don't match the camelCase docOps field names. On read, rename in-place
+# so subsequent upserts populate existing columns rather than auto-extending
+# new ones. Position-preserving — row data stays under the same index.
+_LEGACY_HEADER_RENAME: dict[str, dict[str, str]] = {
+    "emotionalArcs": {
+        "Character":         "character",
+        "Chapter":           "chapter",
+        "Emotional State":   "emotionalState",
+        "Trigger Event":     "triggerEvent",
+        "Intensity (1-10)":  "intensity",
+        "Intensity":         "intensity",
+        "Arc Direction":     "arcDirection",
+    },
+    # subplotBoard / characterMatrix templates already used camelCase names
+    # since their introduction — no legacy aliases needed.
+}
+
 # Optional column order for emit (None → preserve incoming header).
 # Headers come from the existing file when present.
 
@@ -114,10 +133,12 @@ VALID_ROLE_OPS = frozenset({
 VALID_ROLE_TIERS = ("主要角色", "次要角色")
 DEFAULT_ROLE_TIER = "次要角色"
 
-# Roles template — shipped at templates/story/roles/_template.md
+# Roles template — shipped at references/role-template.md (skill-level
+# template, not per-book data; lived under templates/story/roles/_template.md
+# until the cleanup that moved templates out of the data directory).
 _ROLE_TEMPLATE_PATH = (
     Path(__file__).resolve().parent.parent
-    / "templates" / "story" / "roles" / "_template.md"
+    / "references" / "role-template.md"
 )
 
 
@@ -498,6 +519,21 @@ def _apply_table_op(
         return text, f"invalid table op: {kind!r}", notices
 
     preamble, header, rows, postamble = _parse_table_block(text)
+
+    # Legacy header migration (one-shot, in-place): rename pre-camelCase
+    # column titles to today's canonical names so this op writes into the
+    # existing column instead of appending a duplicate. Notice is emitted
+    # so callers can spot when migration kicked in.
+    rename_map = _LEGACY_HEADER_RENAME.get(target)
+    if header and rename_map:
+        renamed = [rename_map.get(h, h) for h in header]
+        if renamed != header:
+            notices.append(
+                f"legacy_header_renamed: {target}: "
+                + ", ".join(f"{a!r}→{b!r}" for a, b in zip(header, renamed) if a != b)
+            )
+            header = renamed
+
     if not header:
         # bootstrap: no table yet — only upsert_row may create one (need fields)
         if kind != "upsert_row":

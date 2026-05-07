@@ -44,7 +44,6 @@ EXPECTED_TEMPLATES = [
     "story/current_focus.md",
     "story/current_state.md",
     "story/emotional_arcs.md",
-    "story/particle_ledger.md",
     "story/pending_hooks.md",
     "story/style_guide.md",
     "story/subplot_board.md",
@@ -52,7 +51,6 @@ EXPECTED_TEMPLATES = [
     "story/state/current_state.json",
     "story/state/hooks.json",
     "story/state/manifest.json",
-    "story/roles/_template.md",
 ]
 
 EXPECTED_GENRES = [
@@ -147,16 +145,20 @@ def check_templates() -> dict:
                     if not (tdir / r).is_file()]
     missing_genre = [g for g in EXPECTED_GENRES
                      if not (tdir / "genres" / g).is_file()]
+    role_tpl = SKILL_ROOT / "references" / "role-template.md"
+    missing_extras = [] if role_tpl.is_file() else ["references/role-template.md"]
 
-    if missing_base or missing_genre:
+    if missing_base or missing_genre or missing_extras:
         bits = []
         if missing_base:
             bits.append(f"templates: {', '.join(missing_base)}")
         if missing_genre:
             bits.append(f"genres: {', '.join(missing_genre)}")
+        if missing_extras:
+            bits.append(f"misc: {', '.join(missing_extras)}")
         return make("Templates integrity", "fail", "; ".join(bits))
     return make("Templates integrity", "ok",
-                f"{len(EXPECTED_TEMPLATES)} base + {len(EXPECTED_GENRES)} genres")
+                f"{len(EXPECTED_TEMPLATES)} base + {len(EXPECTED_GENRES)} genres + role-template")
 
 
 def check_scripts_help() -> list[dict]:

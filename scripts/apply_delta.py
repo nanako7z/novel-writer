@@ -317,6 +317,182 @@ def md_row(values: list) -> str:
     return "| " + " | ".join(str(v) if v is not None else "" for v in values) + " |"
 
 
+# ───────────────── render JSON state → markdown views ────────────────
+# inkos's promise (see references/schemas/runtime-state-delta.md §"writeTargets"):
+# every state-bearing JSON has a paired markdown "view" kept in sync. We render
+# from the JSON authoritatively after each apply_delta write — the markdown
+# files are pure outputs, never authoritative. Anyone hand-editing the md will
+# lose their changes on the next apply_delta run; the doctored header at the
+# top of each rendered file warns about this.
+
+_VIEW_BANNER = (
+    "> 自动渲染：来自 `state/{json_file}`，每次 `apply_delta` 后由脚本重写。\n"
+    "> 直接编辑此文件不会持久化；要改请改 json 或通过 settler delta。\n"
+)
+
+_CS_FIELDS = [
+    ("currentLocation",   "当前位置"),
+    ("protagonistState",  "主角状态"),
+    ("currentGoal",       "当前目标"),
+    ("currentConstraint", "当前约束"),
+    ("currentAlliances",  "当前盟友"),
+    ("currentConflict",   "当前冲突"),
+]
+
+_HOOKS_COLS = [
+    "hookId", "type", "status", "startChapter", "lastAdvancedChapter",
+    "mentionCount", "expectedPayoff", "payoffTiming", "priority",
+    "tags", "involvedCharacters", "notes", "createdAt",
+]
+
+_SUMMARY_COLS = [
+    "chapter", "title", "characters", "events", "stateChanges",
+    "hookActivity", "mood", "chapterType",
+]
+
+
+def _render_table(cols: list[str], rows: list[dict]) -> str:
+    """Markdown table with cols as header; each row dict's values look up by col."""
+    out = ["| " + " | ".join(cols) + " |",
+           "|" + "|".join(["---"] * len(cols)) + "|"]
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        cells = []
+        for c in cols:
+            v = r.get(c, "")
+            if isinstance(v, list):
+                v = ",".join(str(x) for x in v)
+            cells.append(str(v) if v is not None else "")
+        out.append("| " + " | ".join(cells) + " |")
+    return "\n".join(out) + "\n"
+
+
+def render_current_state_md(cs_json: dict) -> str:
+    chapter = cs_json.get("chapter", 0)
+    facts = cs_json.get("facts") or []
+    lines = [
+        "# 当前状态（Current State）",
+        "",
+        _VIEW_BANNER.format(json_file="current_state.json"),
+        "- 当前章次：" + str(chapter),
+    ]
+    for k, label in _CS_FIELDS:
+        v = cs_json.get(k, "")
+        lines.append(f"- {label}：{v if v else ''}")
+    lines += ["", "## 已建立的事实", ""]
+    if facts:
+        for f in facts:
+            if isinstance(f, dict):
+                ch = f.get("chapter", "")
+                txt = f.get("fact") or f.get("text") or ""
+                lines.append(f"- (ch{ch}) {txt}" if ch != "" else f"- {txt}")
+            else:
+                lines.append(f"- {f}")
+    else:
+        lines.append("（暂无）")
+    return "\n".join(lines) + "\n"
+
+
+def render_pending_hooks_md(hooks_json: dict) -> str:
+    rows = hooks_json.get("hooks") or []
+    head = [
+        "# Pending Hooks（钩子追踪）",
+        "",
+        _VIEW_BANNER.format(json_file="hooks.json"),
+        "",
+    ]
+    return "\n".join(head) + _render_table(_HOOKS_COLS, rows)
+
+
+def render_chapter_summaries_md(cs_json: dict) -> str:
+    rows = cs_json.get("rows") or cs_json.get("summaries") or []
+    head = [
+        "# 章节摘要（Chapter Summaries）",
+        "",
+        _VIEW_BANNER.format(json_file="chapter_summaries.json"),
+        "",
+    ]
+    return "\n".join(head) + _render_table(_SUMMARY_COLS, rows)
+
+
+def _render_views_for(book: Path, modified: list[str], warnings: list[str]) -> None:
+    """After json writes, re-render the three paired md views from json."""
+    state_dir = book / "story" / "state"
+    pairs = [
+        (state_dir / "current_state.json",      book / "story" / "current_state.md",      render_current_state_md,    {"chapter": 0, "facts": []}),
+        (state_dir / "hooks.json",              book / "story" / "pending_hooks.md",      render_pending_hooks_md,    {"hooks": []}),
+        (state_dir / "chapter_summaries.json",  book / "story" / "chapter_summaries.md",  render_chapter_summaries_md,{"rows": []}),
+    ]
+    for js, md, render, default in pairs:
+        try:
+            data = load_json(js, default)
+            if not isinstance(data, dict):
+                data = default
+            atomic_write_text(md, render(data))
+            modified.append(str(md))
+        except Exception as e:  # noqa: BLE001 — view render must never abort apply
+            warnings.append(f"view render failed for {md.name}: {e!r}")
+
+
+# ───────────────────────── *Ops → docOps translator ─────────────────
+# Schema-level *Ops (subplotOps / emotionalArcOps / characterMatrixOps) and
+# docOps both target the same three table truth files. Historically they had
+# separate ad-hoc append codepaths here, while doc_ops.py used header-aware
+# upsert — meaning the two paths could disagree on row identity and produce
+# duplicate rows. We now translate *Ops into equivalent docOps batch entries
+# before doc_ops.apply() runs, collapsing to a single write path. Both API
+# surfaces continue to be accepted by the schema; only the implementation
+# unifies.
+_TABLE_OPS_TRANSLATION = {
+    # delta_key:        (docOps target,    key field names,        value field names → docOps `fields` keys)
+    "subplotOps":        ("subplotBoard",   ("subplotId",),         ("name", "status", "lastAdvancedChapter", "characters", "notes")),
+    "emotionalArcOps":   ("emotionalArcs",  ("character", "chapter"), ("emotionalState", "triggerEvent", "intensity", "arcDirection")),
+    "characterMatrixOps":("characterMatrix",("charA", "charB"),     ("relationship", "intimacy", "lastInteraction", "notes")),
+}
+
+
+def _translate_table_ops_to_docops(delta: dict) -> int:
+    """Drain delta[<*Ops>] into delta['docOps'][<target>] as upsert_row entries.
+
+    Returns the number of *Ops items translated. Caller-supplied docOps entries
+    (if any) are preserved by appending after them. *Ops keys are removed from
+    the delta after translation so the legacy ad-hoc writer doesn't run.
+    """
+    docops = delta.setdefault("docOps", {})
+    if not isinstance(docops, dict):
+        delta["docOps"] = {}
+        docops = delta["docOps"]
+    chapter = delta.get("chapter") if isinstance(delta.get("chapter"), int) else None
+    n = 0
+    for src_key, (target, key_fields, value_fields) in _TABLE_OPS_TRANSLATION.items():
+        ops = delta.pop(src_key, None)
+        if not isinstance(ops, list) or not ops:
+            continue
+        bucket = docops.setdefault(target, [])
+        if not isinstance(bucket, list):
+            # Caller put a non-list under this target; we cannot safely merge.
+            # Skip translation and leave the original *Ops in place to surface
+            # the inconsistency through doc_ops.apply's normal error path.
+            delta[src_key] = ops
+            continue
+        for op in ops:
+            if not isinstance(op, dict):
+                continue
+            key = [op.get(k) for k in key_fields]
+            fields = {k: op.get(k) for k in value_fields if k in op}
+            bucket.append({
+                "op": "upsert_row",
+                "key": key,
+                "fields": fields,
+                "sourcePhase": "settler",
+                "sourceChapter": chapter,
+                "reason": f"settler {src_key} translation",
+            })
+            n += 1
+    return n
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Apply RuntimeStateDelta to truth files (3-stage parser)")
     # Subcommand-style: 'revert-doc-op' is a positional verb that bypasses the
@@ -868,35 +1044,14 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         write_json(sp, cur)
         modified.append(str(sp))
 
-    if "subplotOps" in delta:
-        sb = book / "story" / "subplot_board.md"
-        for op in delta["subplotOps"]:
-            row = md_row([
-                op.get("subplotId"), op.get("name"), op.get("status"),
-                op.get("lastAdvancedChapter"), op.get("characters"), op.get("notes"),
-            ])
-            append_text(sb, row)
-        modified.append(str(sb))
-
-    if "emotionalArcOps" in delta:
-        ea = book / "story" / "emotional_arcs.md"
-        for op in delta["emotionalArcOps"]:
-            row = md_row([
-                op.get("character"), op.get("chapter"), op.get("emotionalState"),
-                op.get("triggerEvent"), op.get("intensity"), op.get("arcDirection"),
-            ])
-            append_text(ea, row)
-        modified.append(str(ea))
-
-    if "characterMatrixOps" in delta:
-        cm = book / "story" / "character_matrix.md"
-        for op in delta["characterMatrixOps"]:
-            row = md_row([
-                op.get("charA"), op.get("charB"), op.get("relationship"),
-                op.get("intimacy"), op.get("lastInteraction"), op.get("notes"),
-            ])
-            append_text(cm, row)
-        modified.append(str(cm))
+    # Translate legacy table *Ops into docOps batch entries — single write
+    # path through doc_ops.apply() with header-aware key upsert.
+    translated_count = _translate_table_ops_to_docops(delta)
+    if translated_count:
+        warnings.append(
+            f"translated {translated_count} table-row op(s) "
+            "(subplotOps/emotionalArcOps/characterMatrixOps) → docOps batch"
+        )
 
     if "notes" in delta:
         note_p = book / "story" / "runtime" / "settler-notes.log"
@@ -920,6 +1075,13 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         modified,
         chapter=doc_chapter,
     )
+
+    # ── render JSON-paired markdown views ───────────────────────────────
+    # current_state / pending_hooks / chapter_summaries md are pure outputs:
+    # rebuilt deterministically from state/*.json after every apply_delta so
+    # downstream consumers (audit_drift, hook_governance, pov_filter fallback)
+    # see fresh data instead of the empty template that used to ship.
+    _render_views_for(book, modified, warnings)
 
     # ── hook governance gate ────────────────────────────────────────────
     governance_report: dict = {}

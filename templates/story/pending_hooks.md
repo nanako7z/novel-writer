@@ -1,7 +1,7 @@
 # Pending Hooks（钩子追踪）
 
-> 真理文件视图。权威数据在 `state/hooks.json`；此处给人类速读。
-> 列含义：startChapter 钩子建立；lastAdvancedChapter 上次推进；expectedPayoff 预期兑现章；payoffTiming 紧迫程度（urgent/normal/loose）。
+> 自动渲染：来自 `state/hooks.json`，每次 `apply_delta` 后由脚本重写。
+> 直接编辑此文件不会持久化；要改请改 json 或通过 settler delta。
 
 | hookId | type | status | startChapter | lastAdvancedChapter | mentionCount | expectedPayoff | payoffTiming | priority | tags | involvedCharacters | notes | createdAt |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|

@@ -11,7 +11,7 @@ Claude 在这一阶段需要读：
 - 刚写完的章节正文（`chapters/<NNNN>.md`）+ 章节标题、章节号
 - `story/runtime/observations.md` ——Observer 产物（必读，作为 user 消息的 observations 块）
 - `story/current_state.md` 与 `story/state/current_state.json` ——当前状态卡
-- `story/particle_ledger.md` ——资源账本（仅数值题材）
+- `story/particle_ledger.md` ——资源账本（仅数值题材；不在 init 模板中，由 Architect 按需建出；缺失则跳过这条输入）
 - `story/pending_hooks.md` 与 `story/state/hooks.json` ——伏笔池
 - `story/chapter_summaries.md` 与 `story/state/chapter_summaries.json` ——已有章节摘要
 - `story/subplot_board.md` ——支线进度板

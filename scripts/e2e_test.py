@@ -193,6 +193,24 @@ def synth_settler_raw(chapter: int) -> str:
             "mood": "压抑后转澄明",
             "hooksAdvanced": ["H001"],
         },
+        # Exercise legacy *Ops; apply_delta translates these to docOps batch
+        # entries internally — covers single-write-path regression.
+        "subplotOps": [
+            {"subplotId": "S001", "name": "断剑之约",
+             "status": "active", "lastAdvancedChapter": chapter,
+             "characters": "主角,神秘人", "notes": "首章建立"},
+        ],
+        "emotionalArcOps": [
+            {"character": "主角", "chapter": chapter,
+             "emotionalState": "释然", "triggerEvent": "归还断剑",
+             "intensity": 6, "arcDirection": "stable"},
+        ],
+        "characterMatrixOps": [
+            {"charA": "主角", "charB": "神秘人",
+             "relationship": "约定承担者",
+             "intimacy": 1, "lastInteraction": f"ch{chapter}",
+             "notes": "首次会面"},
+        ],
         "notes": "首章基线设定；建立断剑核心 hook。",
     }
     return (

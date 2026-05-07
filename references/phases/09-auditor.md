@@ -15,7 +15,7 @@ Auditor 进入时必须能读到下列文件 / 上下文：
 - 章节正文：normalize 阶段产出的当前 draft（已落到 `chapters/<NNNN>.md` 或 working buffer 中）
 - 真理文件（按 inkos 原 reader 顺序）：
   - `story/state/current_state.json`（fallback：`story/current_state.md`）
-  - `story/particle_ledger.md`（仅当 GenreProfile.numericalSystem=true 时进 prompt）
+  - `story/particle_ledger.md`（仅当 GenreProfile.numericalSystem=true 时进 prompt；该文件不在 init 模板中，需 Architect 按题材按需建出，缺失则跳过）
   - `story/pending_hooks.md`
   - `story/style_guide.md`（缺失时退回 `book_rules.md` 的 body）
   - `story/subplot_board.md`
