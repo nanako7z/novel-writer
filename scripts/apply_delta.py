@@ -67,7 +67,9 @@ from _constants import BOOK_STATUS_INITIAL  # noqa: E402  — single source of t
 # candidates against the existing ledger BEFORE schema re-validation and
 # governance gate. Imported in-process to avoid a subprocess hop.
 from hook_arbitrate import arbitrate as arbitrate_hooks  # noqa: E402
+from role_arbitrate import arbitrate as arbitrate_roles  # noqa: E402
 from _summary import emit_summary  # noqa: E402
+import doc_ops  # noqa: E402  — docOps applier (sister module)
 
 HOOK_GOVERNANCE_SCRIPT = Path(__file__).resolve().parent / "hook_governance.py"
 COMMITMENT_LEDGER_SCRIPT = Path(__file__).resolve().parent / "commitment_ledger.py"
@@ -317,10 +319,16 @@ def md_row(values: list) -> str:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Apply RuntimeStateDelta to truth files (3-stage parser)")
+    # Subcommand-style: 'revert-doc-op' is a positional verb that bypasses the
+    # normal apply pipeline. Detected before argparse parsing in main().
     p.add_argument("--book", required=True, help="book directory path")
-    g = p.add_mutually_exclusive_group(required=True)
+    g = p.add_mutually_exclusive_group(required=False)
     g.add_argument("--delta", help="path to delta file (raw JSON or settler-wrapped output)")
     g.add_argument("--delta-stdin", action="store_true", help="read delta payload from stdin")
+    p.add_argument(
+        "--op-id",
+        help="(only with revert-doc-op verb) opId hash to revert from doc_changes.log",
+    )
     p.add_argument(
         "--input-mode",
         choices=["json", "raw"],
@@ -354,6 +362,20 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=12,
         help="hard cap on live hooks honored by the arbiter (default: 12; -1 disables)",
+    )
+    p.add_argument(
+        "--max-roster",
+        type=int,
+        default=30,
+        help="advisory cap on total roles in story/roles/ (default: 30; -1 disables). "
+        "Above the cap, role arbiter rejects new admissions.",
+    )
+    p.add_argument(
+        "--skip-role-arbitration",
+        action="store_true",
+        help="skip the pre-write role arbiter (newRoleCandidates won't be "
+        "materialized into create_role docOps). Use only when you've shaped "
+        "delta.docOps.roles externally.",
     )
     p.add_argument(
         "--feedback-format",
@@ -587,7 +609,65 @@ def parse_input(raw: str, *, input_mode: str) -> dict:
 
 
 def main() -> int:
+    # Subcommand-style verb: `apply_delta.py --book BK revert-doc-op --op-id SHA8`
+    # Detect before argparse to avoid making `--delta` mandatory for revert.
+    if "revert-doc-op" in sys.argv[1:]:
+        argv = [a for a in sys.argv[1:] if a != "revert-doc-op"]
+        # minimal parser for revert
+        rp = argparse.ArgumentParser(description="Revert a previously applied docOp")
+        rp.add_argument("--book", required=True)
+        rp.add_argument("--op-id", required=True)
+        rargs = rp.parse_args(argv)
+        rbook = Path(rargs.book).resolve()
+        if not rbook.is_dir():
+            err(f"book dir not found: {rbook}")
+        result = doc_ops.revert(rbook, rargs.op_id)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
+    # Subcommand-style verb: `apply_delta.py --book BK log-direct-edit
+    #   --file FILE --reason R [--chapter N]`
+    # For author-constitution files edited directly under user directive.
+    if "log-direct-edit" in sys.argv[1:]:
+        argv = [a for a in sys.argv[1:] if a != "log-direct-edit"]
+        lp = argparse.ArgumentParser(
+            description="Append an audit-trail entry to doc_changes.log for a "
+            "direct Edit on an author-constitution file (author_intent / "
+            "fanfic_canon / parent_canon / book.json).",
+        )
+        lp.add_argument("--book", required=True)
+        lp.add_argument(
+            "--file", required=True,
+            help="book-relative path of the file you just edited "
+            "(e.g. 'story/author_intent.md' or 'book.json')",
+        )
+        lp.add_argument("--reason", required=True,
+                        help="why the change was made (≤ 200 chars)")
+        lp.add_argument(
+            "--chapter", type=int, default=None,
+            help="optional chapter number to stamp; defaults to "
+            "manifest.lastAppliedChapter when available",
+        )
+        largs = lp.parse_args(argv)
+        lbook = Path(largs.book).resolve()
+        if not lbook.is_dir():
+            err(f"book dir not found: {lbook}")
+        chapter = largs.chapter
+        if chapter is None:
+            mp = lbook / "story" / "state" / "manifest.json"
+            if mp.exists():
+                try:
+                    mfst = json.loads(mp.read_text(encoding="utf-8"))
+                    chapter = mfst.get("lastAppliedChapter")
+                except (OSError, json.JSONDecodeError):
+                    chapter = None
+        result = doc_ops.log_direct_edit(lbook, largs.file, largs.reason, chapter)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
     args = parse_args()
+    if not args.delta and not args.delta_stdin:
+        err("must specify --delta <path> or --delta-stdin (or use revert-doc-op verb)")
     book = Path(args.book).resolve()
     if not book.is_dir():
         err(f"book dir not found: {book}")
@@ -707,6 +787,43 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
     elif args.skip_arbitration:
         arbitration_report = {"ran": False, "reason": "skipped via --skip-arbitration"}
 
+    # ── Role arbitration (pre-write, after hook arbitration) ─────────────
+    # Drains delta["newRoleCandidates"] into delta["docOps"]["roles"] as
+    # create_role ops; mapped/rejected candidates produce decisions only.
+    role_arbitration_report: dict = {
+        "ran": False,
+        "reason": "no newRoleCandidates",
+    }
+    if not args.skip_role_arbitration and delta.get("newRoleCandidates"):
+        try:
+            rarb = arbitrate_roles(book, delta, max_roster=args.max_roster)
+            delta = rarb["resolvedDelta"]
+            r_decisions = rarb["decisions"]
+            r_counts = {"created": 0, "mapped": 0, "rejected": 0}
+            for d in r_decisions:
+                r_counts[d["action"]] = r_counts.get(d["action"], 0) + 1
+            role_arbitration_report = {
+                "ran": True,
+                "decisions": r_decisions,
+                "summary": (
+                    f"n_created={r_counts['created']} n_mapped={r_counts['mapped']} "
+                    f"n_rejected={r_counts['rejected']}"
+                ),
+                "counts": r_counts,
+            }
+            if r_counts["rejected"] > 0:
+                warnings.append(
+                    f"role arbiter rejected {r_counts['rejected']} candidate(s); "
+                    "see roleArbitration.decisions for reasons."
+                )
+        except Exception as e:  # noqa: BLE001 — must not crash apply
+            role_arbitration_report = {"ran": False, "error": f"{e!r}"}
+            warnings.append(f"role arbitration failed: {e!r}; continuing.")
+    elif args.skip_role_arbitration:
+        role_arbitration_report = {
+            "ran": False, "reason": "skipped via --skip-role-arbitration",
+        }
+
     if "currentStatePatch" in delta:
         cs_p = state_dir / "current_state.json"
         cur = load_json(cs_p, {"chapter": 0, "facts": []})
@@ -789,6 +906,20 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         for n in notes:
             append_text(note_p, str(n))
         modified.append(str(note_p))
+
+    # ── docOps (LLM-driven guidance md edits) ───────────────────────────
+    # Defense in depth: blacklist enforcement here is independent of the
+    # schema check in settler_parse.validate_delta. Schema-fail upstream
+    # would normally have refused the batch already, but a forged delta
+    # JSON shouldn't be able to reach the truth files either.
+    doc_chapter = delta.get("chapter") if isinstance(delta.get("chapter"), int) else None
+    doc_ops_applied: list[dict] = doc_ops.apply(
+        book,
+        delta.get("docOps"),
+        warnings,
+        modified,
+        chapter=doc_chapter,
+    )
 
     # ── hook governance gate ────────────────────────────────────────────
     governance_report: dict = {}
@@ -889,11 +1020,13 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         "filesModified": sorted(set(modified)),
         "warnings": warnings,
         "arbitration": arbitration_report,
+        "roleArbitration": role_arbitration_report,
         "hookGovernance": governance_report,
         "commitmentLedger": commitment_report,
         "hookGovernanceBlocked": governance_blocked,
         "bookMetadata": book_metadata,
         "manifestAdvance": manifest_advance,
+        "docOpsApplied": doc_ops_applied,
     }, ensure_ascii=False, indent=2))
     chapter_label = "?"
     if isinstance(delta, dict):

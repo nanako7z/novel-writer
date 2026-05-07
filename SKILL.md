@@ -155,6 +155,10 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "看 xianxia 题材 profile / show genre" | `python scripts/genre.py show <id> [--json]` |
 | "新增自定义题材 / 复制 profile 改" | `python scripts/genre.py add <newId> --from <baseId> [--name "..."] [--out <path>]`（默认写到 `<workdir>/genres/<newId>.md`，需手动 edit） |
 | "校验题材 profile schema" | `python scripts/genre.py validate [<id>]`（不带 id 校验全部） |
+| "调整章节焦点 / 角色关系 / 风格 / outline / role 档案"（白名单指导 md） | 走 user-directive docOps 流程（见 §"用户指令式调整设定"）——LLM 构造最小 docOps delta → 写到 `story/runtime/user-directive.delta.json` → 调 `apply_delta.py` |
+| "改 author_intent / book_rules / fanfic_canon / parent_canon"（作者宪法） | LLM 直接 `Edit` 对应文件后，调 `python scripts/apply_delta.py --book <bookDir> log-direct-edit --file <path> --reason "..."` 补审计日志；不走 `.bak` |
+| "看哪些 md 被改过 / 谁改的" | `cat story/runtime/doc_changes.log` |
+| "回滚某次 docOp" | `python scripts/apply_delta.py --book <bookDir> revert-doc-op --op-id <sha8>`（仅适用于走 docOps 落盘的；宪法直 Edit 用 `git checkout` 或手动恢复） |
 
 ## 同人 / 风格分支
 
@@ -193,6 +197,56 @@ python {SKILL_ROOT}/scripts/sensitive_scan.py --file <draft.md>
 - 性 / 极端暴力词（severity=warn）→ 标记给作者，不强删
 
 参考词表与阈值见 [references/ai-tells.md](references/ai-tells.md) 和 [references/sensitive-words.md](references/sensitive-words.md)。
+
+## 用户指令式调整设定
+
+当作者在主对话里说"调整 X 设定"/"把主角性格改成 Y"/"修一下风格指引"时，**两条路径**：
+
+### 路径 A：白名单指导 md（current_focus / style_guide / character_matrix / emotional_arcs / subplot_board / outline/* / roles/*）
+
+**禁止直接 `Edit`**——必须走 docOps user-directive 通道（保证 anchor 解析、表结构、`.bak` 备份、可回滚）。流程：
+
+1. LLM 先 `Read` 对应 md，看清结构（H2 节名 / 表格列名）
+2. 构造一份最小 docOps delta，注意：
+   - `sourcePhase: "user-directive"`
+   - `sourceChapter`: 当前 `manifest.lastAppliedChapter`（不知道就用 0）
+   - `reason`: 引用作者原话，≤ 200 chars
+3. 写到 `story/runtime/user-directive.delta.json`，形如：
+   ```json
+   {
+     "chapter": <lastAppliedChapter>,
+     "docOps": {
+       "currentFocus": [{
+         "op": "replace_section",
+         "anchor": "## Active Focus",
+         "newContent": "...",
+         "reason": "用户：把焦点从 X 切到 Y",
+         "sourcePhase": "user-directive",
+         "sourceChapter": <lastAppliedChapter>
+       }]
+     }
+   }
+   ```
+4. 调 `python scripts/apply_delta.py --book <bookDir> --delta story/runtime/user-directive.delta.json --skip-hook-governance --skip-commitment-ledger --skip-book-metadata`
+5. 把 `docOpsApplied` 列表回执给作者
+
+### 路径 B：作者宪法（author_intent / book_rules / fanfic_canon / parent_canon）
+
+这四个文件**自动通道永远只读**（schema 阶段就拒），但**作者明示指令时 LLM 可直接 `Edit`**——这是作者主权例外。流程：
+
+1. LLM 直接 `Edit` 目标文件（`book_rules` = `book.json#bookRules` 子树）
+2. **必须**调一次 helper 命令补齐审计日志：
+   ```bash
+   python scripts/apply_delta.py --book <bookDir> log-direct-edit \
+       --file story/author_intent.md --reason "用户：把核心命题改成 X"
+   ```
+   helper 会自动读 `manifest.lastAppliedChapter` 作章节号，写入 `story/runtime/doc_changes.log` 一行 NDJSON（`sourcePhase: "user-directive-direct-edit"`，`opId` 自动 SHA8）。`--reason` 上限 200 chars。
+3. 不走 `.bak`——宪法变更频次低，靠 git 或手动备份兜底；`revert-doc-op` 对 direct_edit 不支持，要回滚用 `git checkout` 或手工恢复
+4. 完成后把 helper 回执的 `opId` 告诉作者
+
+### LLM 自己起意改任何 md → **永远禁止**
+
+如果 LLM 觉得"这条焦点该推进了"但作者没明示——**必须先问作者**，得到明确指令后再决定走 A 还是 B。Settler / Architect 通过自动 docOps 通道改白名单 md 是合法的（因为本章正文实际触发），但跳出主循环的"主动改"必须由作者授权。
 
 ## 真理文件契约
 

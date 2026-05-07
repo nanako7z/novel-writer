@@ -52,6 +52,7 @@ EXPECTED_TEMPLATES = [
     "story/state/current_state.json",
     "story/state/hooks.json",
     "story/state/manifest.json",
+    "story/roles/_template.md",
 ]
 
 EXPECTED_GENRES = [
@@ -98,6 +99,8 @@ EXPECTED_SCRIPTS = [
     "genre.py",
     "context_budget.py",
     "book_lock.py",
+    "doc_ops.py",
+    "role_arbitrate.py",
     "e2e_test.py",
 ]
 
@@ -417,6 +420,65 @@ def check_book(book_dir: Path) -> list[dict]:
         else:
             out.append(make("genre profile", "fail",
                             f"{genre}.md and other.md both missing"))
+
+    # docOpsConfig sanity + doc_changes.log integrity
+    doc_log = book_dir / "story" / "runtime" / "doc_changes.log"
+    if not doc_log.exists():
+        out.append(make("doc_changes.log", "ok", "absent (no docOps applied yet)"))
+    else:
+        n_lines = 0
+        n_bad = 0
+        n_missing_bak = 0
+        try:
+            lines = doc_log.read_text(encoding="utf-8").splitlines()
+        except OSError as e:
+            lines = []
+            out.append(make("doc_changes.log", "fail", f"read error: {e}"))
+        # only check the last 50 entries (older bak may be pruned)
+        for line in lines[-50:]:
+            line = line.strip()
+            if not line:
+                continue
+            n_lines += 1
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                n_bad += 1
+                continue
+            bak_rel = rec.get("backupPath")
+            if bak_rel and not (book_dir / bak_rel).exists():
+                n_missing_bak += 1
+        if n_bad:
+            out.append(make("doc_changes.log", "warning",
+                            f"{n_bad} malformed line(s) in last 50 entries"))
+        elif n_missing_bak:
+            out.append(make("doc_changes.log", "warning",
+                            f"{n_missing_bak}/{n_lines} entries reference missing .bak "
+                            "(may be normal if pruned beyond retention window)"))
+        else:
+            out.append(make("doc_changes.log", "ok",
+                            f"{n_lines} entries (last 50), all bak present"))
+
+    if book is not None:
+        cfg = book.get("docOpsConfig") or {}
+        if cfg:
+            deny = cfg.get("deny") or []
+            allow = cfg.get("allowSourcePhases") or []
+            invalid_deny = [d for d in deny if not isinstance(d, str)]
+            invalid_allow = [
+                a for a in allow
+                if a not in {"settler", "auditor-derived", "architect", "user-directive"}
+            ]
+            if invalid_deny or invalid_allow:
+                out.append(make(
+                    "docOpsConfig", "warning",
+                    f"invalid entries: deny={invalid_deny} allowSourcePhases={invalid_allow}",
+                ))
+            else:
+                out.append(make(
+                    "docOpsConfig", "ok",
+                    f"deny={len(deny)} allowSourcePhases={allow or 'all'}",
+                ))
 
     return out
 

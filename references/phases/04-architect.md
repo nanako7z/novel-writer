@@ -290,6 +290,49 @@ enableFullCastTracking: false
 - Architect 同时写两份保证两种读法都能拿到一致数据
 - 重构时只动权威文件，跑一次 Architect revise 重新生成 shim 即可
 
+### Cascade docOps（Architect 重做大纲时刷新下游）
+
+Architect 重写 outline 时，5 SECTION 用整文件覆写——但 outline 改动会**让下游指导 md 与新 outline 失同步**：原 `current_focus.md` 的下条焦点可能引用了已删除的钩子；某个 role 的"当前现状"可能已被 outline 改变。
+
+为了避免这个失同步坑，Architect 出完 5 SECTION + Foundation Reviewer pass **之后**，再额外产一份 docOps（同步白名单中受影响的 md），写到 `story/runtime/architect-cascade.delta.json`，形如：
+
+```json
+{
+  "chapter": <manifest.lastAppliedChapter>,
+  "docOps": {
+    "currentFocus": [
+      {
+        "op": "replace_section",
+        "anchor": "## Active Focus",
+        "newContent": "...（按新 outline 重写的近 1-3 章焦点）",
+        "reason": "Architect 重做：旧焦点引用的钩子已不在新 pending_hooks 里",
+        "sourcePhase": "architect",
+        "sourceChapter": <n>
+      }
+    ],
+    "roles": [
+      {
+        "op": "patch_role_section",
+        "slug": "lin-qiu",
+        "anchor": "## 当前现状",
+        "newContent": "...（按新 roles/<slug>.md 派生）",
+        "reason": "Architect 重做：主角弧线起点改变",
+        "sourcePhase": "architect",
+        "sourceChapter": <n>
+      }
+    ]
+  }
+}
+```
+
+主循环在 Architect 落盘后调：
+
+```bash
+python scripts/apply_delta.py --book <bookDir> --delta story/runtime/architect-cascade.delta.json --skip-hook-governance --skip-commitment-ledger --skip-book-metadata
+```
+
+**只 cascade 白名单 md**（current_focus / character_matrix / emotional_arcs / subplot_board / roles/*）；outline 自身（story_frame / volume_map）已经是整文件覆写，**不再**通过 docOps 改一次。**绝不**动作者宪法（author_intent / book_rules / fanfic_canon / parent_canon）——这些由作者明示指令时直 Edit。
+
 ## Failure handling
 
 参 inkos：Architect 最多 2 轮——第 1 轮 Architect + Foundation Reviewer，必要时 + 第 2 轮 Architect + Foundation Reviewer。

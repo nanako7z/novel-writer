@@ -538,6 +538,217 @@ def validate_delta(d) -> list[dict]:
     if "notes" in d and not isinstance(d["notes"], (str, list)):
         errs.append(_ferr("notes", type(d["notes"]).__name__, "string|array<string>"))
 
+    if "docOps" in d:
+        errs.extend(_validate_doc_ops("docOps", d["docOps"]))
+
+    if "newRoleCandidates" in d:
+        nrc = d["newRoleCandidates"]
+        if not isinstance(nrc, list):
+            errs.append(_ferr("newRoleCandidates", type(nrc).__name__, "array"))
+        else:
+            for i, c in enumerate(nrc):
+                if not isinstance(c, dict):
+                    errs.append(_ferr(f"newRoleCandidates[{i}]", type(c).__name__, "object"))
+                    continue
+                if not isinstance(c.get("name"), str) or not c.get("name"):
+                    errs.append(_ferr(
+                        f"newRoleCandidates[{i}].name",
+                        c.get("name", "missing"),
+                        "non-empty string",
+                    ))
+
+    return errs
+
+
+# ───────────────────────────── docOps schema (apply-time defenses live in doc_ops.py) ─
+
+# Whitelist mirrors doc_ops.DOC_OPS_WHITELIST. Kept duplicated here to keep
+# settler_parse.py importable without the doc_ops module loaded.
+_DOC_OPS_TARGETS = frozenset({
+    "currentFocus", "styleGuide", "storyFrame", "volumeMap",
+    "characterMatrix", "emotionalArcs", "subplotBoard", "roles",
+})
+_DOC_OPS_BLACKLIST_KEYS = frozenset({
+    "authorIntent", "fanficCanon", "parentCanon", "bookRules",
+})
+_DOC_OPS_SECTION_TARGETS = frozenset({"currentFocus", "styleGuide", "storyFrame", "volumeMap"})
+_DOC_OPS_TABLE_TARGETS = frozenset({"characterMatrix", "emotionalArcs", "subplotBoard"})
+_DOC_OPS_VALID_SECTION_KINDS = frozenset({"replace_section", "append_section", "delete_section"})
+_DOC_OPS_VALID_TABLE_KINDS = frozenset({"upsert_row", "update_row", "delete_row"})
+_DOC_OPS_VALID_ROLE_KINDS = frozenset({
+    "create_role", "patch_role_section", "rename_role", "delete_role",
+})
+_DOC_OPS_VALID_ROLE_TIERS = frozenset({"主要角色", "次要角色"})
+_DOC_OPS_VALID_PHASES = frozenset({
+    "settler", "auditor-derived", "architect", "user-directive",
+})
+_DOC_OPS_REASON_CAP = 200
+_DOC_OPS_NEW_CONTENT_CAP = {
+    "currentFocus": 2000, "styleGuide": 3000,
+    "storyFrame": 5000, "volumeMap": 5000,
+}
+_DOC_OPS_ROLE_CAP = 4000
+_DOC_OPS_MAX_BATCH = 20
+
+
+def _validate_doc_ops(path_prefix: str, do) -> list[dict]:
+    errs: list[dict] = []
+    if not isinstance(do, dict):
+        return [_ferr(path_prefix, type(do).__name__, "object")]
+
+    # blacklist keys at the top level
+    for blk in _DOC_OPS_BLACKLIST_KEYS:
+        if blk in do:
+            errs.append(_ferr(
+                f"{path_prefix}.{blk}",
+                "present",
+                "absent (author-constitution files cannot be modified via docOps)",
+            ))
+
+    total = 0
+    for target, ops in do.items():
+        if target in _DOC_OPS_BLACKLIST_KEYS:
+            continue  # already flagged
+        if target not in _DOC_OPS_TARGETS:
+            errs.append(_ferr(
+                f"{path_prefix}.{target}", target, f"one of {sorted(_DOC_OPS_TARGETS)}",
+            ))
+            continue
+        if not isinstance(ops, list):
+            errs.append(_ferr(f"{path_prefix}.{target}", type(ops).__name__, "array"))
+            continue
+        for i, op in enumerate(ops):
+            total += 1
+            errs.extend(_validate_doc_op(f"{path_prefix}.{target}[{i}]", target, op))
+
+    if total > _DOC_OPS_MAX_BATCH:
+        errs.append(_ferr(
+            path_prefix,
+            f"{total} ops",
+            f"<= {_DOC_OPS_MAX_BATCH} ops per batch",
+        ))
+
+    return errs
+
+
+def _validate_doc_op(path: str, target: str, op) -> list[dict]:
+    errs: list[dict] = []
+    if not isinstance(op, dict):
+        return [_ferr(path, type(op).__name__, "object")]
+
+    kind = op.get("op")
+    reason = op.get("reason")
+    phase = op.get("sourcePhase")
+
+    if not isinstance(reason, str) or not reason.strip():
+        errs.append(_ferr(f"{path}.reason", reason, "non-empty string"))
+    elif len(reason) > _DOC_OPS_REASON_CAP:
+        errs.append(_ferr(
+            f"{path}.reason", f"len={len(reason)}", f"<= {_DOC_OPS_REASON_CAP} chars",
+        ))
+
+    if phase not in _DOC_OPS_VALID_PHASES:
+        errs.append(_ferr(
+            f"{path}.sourcePhase", phase, "|".join(sorted(_DOC_OPS_VALID_PHASES)),
+        ))
+
+    if not _is_int(op.get("sourceChapter")) or op["sourceChapter"] < 0:
+        errs.append(_ferr(f"{path}.sourceChapter", op.get("sourceChapter"), "int>=0"))
+
+    if target in _DOC_OPS_SECTION_TARGETS:
+        if kind not in _DOC_OPS_VALID_SECTION_KINDS:
+            errs.append(_ferr(
+                f"{path}.op", kind, "|".join(sorted(_DOC_OPS_VALID_SECTION_KINDS)),
+            ))
+        anchor = op.get("anchor")
+        if not isinstance(anchor, str) or not anchor.strip():
+            errs.append(_ferr(f"{path}.anchor", anchor, "non-empty string"))
+        elif not (anchor.startswith("## ") or anchor.startswith("### ")):
+            errs.append(_ferr(f"{path}.anchor", anchor, "starts with '## ' or '### '"))
+        if kind in {"replace_section", "append_section"}:
+            nc = op.get("newContent", "")
+            if not isinstance(nc, str):
+                errs.append(_ferr(f"{path}.newContent", type(nc).__name__, "string"))
+            else:
+                cap = _DOC_OPS_NEW_CONTENT_CAP.get(target, 5000)
+                if len(nc) > cap:
+                    errs.append(_ferr(
+                        f"{path}.newContent", f"len={len(nc)}", f"<= {cap} chars",
+                    ))
+        return errs
+
+    if target in _DOC_OPS_TABLE_TARGETS:
+        if kind not in _DOC_OPS_VALID_TABLE_KINDS:
+            errs.append(_ferr(
+                f"{path}.op", kind, "|".join(sorted(_DOC_OPS_VALID_TABLE_KINDS)),
+            ))
+        key = op.get("key")
+        if isinstance(key, str):
+            pass  # allow string for single-column key
+        elif isinstance(key, list):
+            if not key or not all(isinstance(k, (str, int)) for k in key):
+                errs.append(_ferr(f"{path}.key", key, "non-empty array of string|int"))
+        else:
+            errs.append(_ferr(f"{path}.key", type(key).__name__, "string or array<string|int>"))
+        if kind in {"upsert_row", "update_row"}:
+            fields = op.get("fields")
+            if not isinstance(fields, dict) or not fields:
+                errs.append(_ferr(f"{path}.fields", fields, "non-empty object"))
+        return errs
+
+    # roles
+    if kind not in _DOC_OPS_VALID_ROLE_KINDS:
+        errs.append(_ferr(
+            f"{path}.op", kind, "|".join(sorted(_DOC_OPS_VALID_ROLE_KINDS)),
+        ))
+    slug = op.get("slug")
+    # slug = filename stem; accept any non-empty string without slash/control chars,
+    # ≤ 80 chars (matches doc_ops._validate_slug).
+    if not isinstance(slug, str) or not slug.strip():
+        errs.append(_ferr(f"{path}.slug", slug, "non-empty string (filename stem)"))
+    elif re.search(r"[\\/\x00-\x1f]", slug) or slug.startswith(".") or len(slug) > 80:
+        errs.append(_ferr(
+            f"{path}.slug", slug,
+            "non-empty filesystem-safe string (no slash, no leading dot, ≤ 80 chars)",
+        ))
+
+    if kind == "create_role":
+        tier = op.get("tier")
+        if tier is not None and tier not in _DOC_OPS_VALID_ROLE_TIERS:
+            errs.append(_ferr(
+                f"{path}.tier", tier,
+                "|".join(sorted(_DOC_OPS_VALID_ROLE_TIERS)) + " (or omitted for default 次要角色)",
+            ))
+        ic = op.get("initialContent", None)
+        if ic is not None:
+            if not isinstance(ic, str):
+                errs.append(_ferr(f"{path}.initialContent", type(ic).__name__, "string"))
+            elif len(ic) > _DOC_OPS_ROLE_CAP:
+                errs.append(_ferr(
+                    f"{path}.initialContent",
+                    f"len={len(ic)}", f"<= {_DOC_OPS_ROLE_CAP} chars",
+                ))
+        dn = op.get("displayName")
+        if dn is not None and (not isinstance(dn, str) or not dn.strip()):
+            errs.append(_ferr(f"{path}.displayName", dn, "non-empty string or omitted"))
+    elif kind == "patch_role_section":
+        anchor = op.get("anchor")
+        if not isinstance(anchor, str) or not anchor.strip():
+            errs.append(_ferr(f"{path}.anchor", anchor, "non-empty string"))
+        nc = op.get("newContent", "")
+        if isinstance(nc, str) and len(nc) > _DOC_OPS_ROLE_CAP:
+            errs.append(_ferr(
+                f"{path}.newContent", f"len={len(nc)}", f"<= {_DOC_OPS_ROLE_CAP} chars",
+            ))
+    elif kind == "rename_role":
+        new_slug = op.get("newSlug")
+        if not isinstance(new_slug, str) or not new_slug.strip():
+            errs.append(_ferr(f"{path}.newSlug", new_slug, "non-empty string"))
+        elif re.search(r"[\\/\x00-\x1f]", new_slug) or new_slug.startswith(".") or len(new_slug) > 80:
+            errs.append(_ferr(
+                f"{path}.newSlug", new_slug,
+                "filesystem-safe string (no slash, no leading dot, ≤ 80 chars)",
+            ))
     return errs
 
 

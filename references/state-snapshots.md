@@ -89,7 +89,8 @@ python scripts/snapshot_state.py --book <bookDir> restore --chapter N \
 - 把 snapshot 里的 7 个 md + 4 个 state JSON **覆盖**到 `<target>/story/` 与 `<target>/story/state/`。
 - `--target` 不给就默认 `--book`；给的话可以"把书 A 的 snapshot N restore 到书 B 的目录"——方便做 fork / 分支实验。
 - **会被覆盖的**：snapshot 里有的 7 个 md + 4 个 state JSON。
-- **不会被动**：`chapters/*.md`、`chapters/index.json`、`story/runtime/*`、`story/raw_writer/*`、`story/outline/*`、`story/roles/*`、`book.json`、所有 author_intent / current_focus / book_rules / style_guide / fanfic_canon。
+- **不会被动**：`chapters/*.md`、`chapters/index.json`、`story/runtime/*`、`story/raw_writer/*`、`book.json`、`story/author_intent.md` / `story/fanfic_canon.md` / `story/parent_canon.md`（作者宪法，永不被动）。
+- **新规则（v1.4 起）**：`story/current_focus.md` / `story/style_guide.md` / `story/character_matrix.md` / `story/emotional_arcs.md` / `story/subplot_board.md` / `story/outline/*` / `story/roles/*` 现在**会**被 `docOps` 通道（[runtime-state-delta.md §7b](schemas/runtime-state-delta.md)）修改；它们的 docOps 中间态备份在 `story/runtime/doc_ops.bak/<NNNN>/`，每次落盘有 `doc_changes.log` 留痕。`snapshot_state.py` 的行为本身**不变**——它依然按章打整书快照；docOps 的 `.bak` 是更细粒度的中间安全网（保留最近 5 章），互不干扰。
 - snapshot 里**没有**的可选 md（比如 `particle_ledger.md` 在没数值系统的题材下不存在）会**从 target 删掉**——这与 inkos `restoreState` 行为一致：snapshot 是"完整快照"，缺即删。
 - `current_state.md` 与 `pending_hooks.md` 是 required；snapshot 缺这两个会拒绝 restore（除非 `--force`）。
 

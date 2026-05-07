@@ -278,6 +278,138 @@ truth files updated
 
 ---
 
+## 7b. `docOps` 子 schema（指导 md 维护）
+
+`docOps` 让 LLM 通过同一条 RuntimeStateDelta 通道**主动修改作者域指导 md**。和 `hookOps` 平级，由 `apply_delta.py → doc_ops.apply()` 落盘，写前自动 `.bak`，每条 op 在 `story/runtime/doc_changes.log` 留 NDJSON 痕迹，可通过 `apply_delta.py revert-doc-op --op-id <sha8>` 回滚。
+
+### 顶层形状
+
+| 字段 | 路由到 | op 类型 |
+|------|--------|---------|
+| `currentFocus` | `story/current_focus.md` | SectionReplaceOp |
+| `styleGuide` | `story/style_guide.md` | SectionReplaceOp |
+| `storyFrame` | `story/outline/story_frame.md` | SectionReplaceOp |
+| `volumeMap` | `story/outline/volume_map.md` | SectionReplaceOp |
+| `characterMatrix` | `story/character_matrix.md` | TableRowOp |
+| `emotionalArcs` | `story/emotional_arcs.md` | TableRowOp |
+| `subplotBoard` | `story/subplot_board.md` | TableRowOp |
+| `roles` | `story/roles/<slug>.md` | RoleFileOp |
+
+### 黑名单（永远禁止，schema-fail）
+
+下列顶层键**不允许**出现在 `docOps` 里——它们是作者宪法，仅作者本人通过对话明示指令时由 LLM 直接 `Edit`：
+
+- `authorIntent`（`story/author_intent.md`）
+- `fanficCanon`（`story/fanfic_canon.md`）
+- `parentCanon`（`story/parent_canon.md`）
+- `bookRules`（`book.json#bookRules`）
+
+### 通用必填字段（每条 op）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `op` | enum | 见各 op kind |
+| `reason` | string ≤ 200 chars | 必填，本次修改的原因 |
+| `sourcePhase` | enum | `settler` / `auditor-derived` / `architect` / `user-directive` |
+| `sourceChapter` | int ≥ 0 | 当前章节号（user-directive 用 `manifest.lastAppliedChapter`） |
+
+### `SectionReplaceOp`（散文型）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `op` | enum | `replace_section` / `append_section` / `delete_section` |
+| `anchor` | string | 完整 H2/H3 行（如 `## Active Focus`），必须以 `## ` 或 `### ` 开头 |
+| `newContent` | string | 新节正文；`replace_section` / `append_section` 必填 |
+
+newContent 字符上限：`currentFocus` 2000 / `styleGuide` 3000 / `storyFrame` 5000 / `volumeMap` 5000。
+
+### `TableRowOp`（结构化表格）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `op` | enum | `upsert_row` / `update_row` / `delete_row` |
+| `key` | string \| array<string\|int> | 主键（`characterMatrix` = `[charA, charB]`；`emotionalArcs` = `[character, chapter]`；`subplotBoard` = `[subplotId]`） |
+| `fields` | object | 列名→新值；`upsert_row` / `update_row` 必填 |
+
+upsert 允许出现 header 中尚未存在的列名——doc_ops 会自动扩 header（其他行该列补空字串）。这是 append-only → upsert 的语义升级。
+
+### `RoleFileOp`（角色档案）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `op` | enum | `create_role` / `patch_role_section` / `rename_role` / `delete_role` |
+| `slug` | string | 文件名 stem（可中文）；映射到 `story/roles/<tier>/<slug>.md`。≤ 80 chars，不含 `/`、控制字符、不以 `.` 开头 |
+| `tier` | enum | `主要角色` / `次要角色`，仅 `create_role` 用；省略默认 `次要角色` |
+| `displayName` | string | 仅 `create_role` 用；写到文件 H1。省略默认与 `slug` 相同 |
+| `initialContent` | string ≤ 4000 chars | 仅 `create_role` 用；省略则用 `templates/story/roles/_template.md` |
+| `anchor` | string | `patch_role_section` 必填，H2/H3 完整行 |
+| `newContent` | string ≤ 4000 chars | `patch_role_section` 必填 |
+| `newSlug` | string | `rename_role` 必填，文件名规则同 `slug` |
+
+`delete_role`：删除整文件（写 `.bak` 后 `unlink`）。仅在确认该角色档案确实是误开 / 弃用时使用——如果只是阶段性退场，应该走 `patch_role_section` 改"## 当前现状"为"已退场"。**Settler 一般不主动 `delete_role`**——这通常是 user-directive 路径或 Architect cascade 时使用。
+
+**Settler 一般不直接用 `create_role`** ——更推荐通过 `newRoleCandidates` 候选池让 `role_arbitrate.py` 决定 created / mapped / rejected。Architect cascade 与 user-directive 流程可以直接用 `create_role`（作者明示意图）。
+
+### `newRoleCandidates`（顶层，与 `docOps` 平级）
+
+由 Settler 写入；apply_delta 调 `role_arbitrate.py` 仲裁，admit 的转成 `docOps.roles[].create_role`，map 的产生 decision（不开新文件），reject 的丢弃（thin justification / roster full / stop name）。
+
+```jsonc
+"newRoleCandidates": [
+  { "name": "白衣女子", "sourceChapter": 12, "justification": "ch12 首次有名出场，林秋拜师对象" }
+]
+```
+
+字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | 候选角色名（作为 slug + displayName） |
+| `sourceChapter` | int ≥ 0 | 首次出场章节号 |
+| `justification` | string ≥ 6 chars | 为什么这是真角色而非路人甲；< 6 chars 直接 reject |
+| `tier` | enum | 可选；`主要角色` / `次要角色`，省略 = `次要角色` |
+
+仲裁逻辑见 [scripts/role_arbitrate.py](../../scripts/role_arbitrate.py)：
+- 名字归一化（去敬称：先生 / 师姐 / 大叔 等；去前缀：老 / 小 / 阿）
+- bigram Jaccard 相似度 ≥ 0.5 → `mapped` 到已有角色（不开新文件）
+- 名字为停用词（他 / 她 / 众人 等）→ `rejected`
+- 满载（默认 30 角色）→ `rejected`
+- justification < 6 chars → `rejected`
+
+`--max-roster <N>` 调节满载阈值；`-1` 关闭。
+
+### 全局上限
+
+- 单次 delta 的 `docOps` 总条数 ≤ **20**（防 LLM 一次刷爆）；超限 schema-fail
+- 单 op 的 `reason` ≤ 200 chars；超限 schema-fail
+- 单 op 的 `newContent` 按上述 per-target 上限；超限 schema-fail
+
+### 配置开关 `book.json#docOpsConfig`
+
+```jsonc
+"docOpsConfig": {
+  "deny": ["story/style_guide.md"],          // 临时只读，apply 时直接 warning + 跳过
+  "allowSourcePhases": ["settler","architect"]  // 限定 sourcePhase；缺省 = 全部允许
+}
+```
+
+### `docOpsApplied` 输出与 `doc_changes.log`
+
+apply_delta 输出 JSON 增 `docOpsApplied: [{file, op, anchor, reason, sourcePhase, backupPath, opId}]`。同时在 `story/runtime/doc_changes.log` 追加 NDJSON：
+```jsonc
+{"appliedAt":"2026-05-07T...","chapter":12,"file":"story/current_focus.md","op":"replace_section","anchor":"## Active Focus","reason":"ch12 兑现 X 后下一段","sourcePhase":"settler","backupPath":"story/runtime/doc_ops.bak/0012/story__current_focus.md.1.bak","opId":"a1b2c3d4"}
+```
+
+### 回滚
+
+```bash
+python scripts/apply_delta.py --book <bk> revert-doc-op --op-id <sha8>
+```
+
+从 `doc_changes.log` 反查 `backupPath`，原子还原。
+
+---
+
 ## 8. 字段→真理文件路由表
 
 | Delta 字段 | 路由到 | 写入方式 |
@@ -294,6 +426,8 @@ truth files updated
 | `emotionalArcOps` | `story/emotional_arcs.md` | 同上 |
 | `characterMatrixOps` | `story/character_matrix.md` | 同上 |
 | `notes` | `story/state/manifest.json#migrationWarnings`（可选） | 也可作为本章日志 |
+| `docOps` | 作者域指导 md（白名单 8 个） | `doc_ops.apply()`，每条写前 `.bak`，应用后追加 `doc_changes.log` |
+| `newRoleCandidates` | role-arbiter（P0 暂未实现，候选保留在 delta 内） | 决定 created / mapped / rejected |
 
 校验后写入：先写 `<file>.tmp` → `os.rename` 原子替换，避免半成品污染。
 
@@ -307,7 +441,8 @@ truth files updated
 - `hooks`（裸数组）——必须包成 `hookOps.upsert`
 - `facts`（裸数组）——必须包成 `currentStatePatch`
 - `rows`（裸数组）——chapterSummary 一次只追一行
-- `bookConfig` / `genreProfile` / `bookRules`——这些是只读输入，不接受 delta 写入
+- `bookConfig` / `genreProfile` / `bookRules`——这些是只读输入；`bookRules` 也属作者宪法，仅作者明示指令时由 LLM 直接 `Edit book.json`，不走 delta
+- `authorIntent` / `fanficCanon` / `parentCanon`——作者宪法（参考 §7b 黑名单），自动通道永不可写
 
 任何未声明字段：宽松校验下保留（因为 `subplotOps` 等用 `z.record(z.unknown())`），但顶层若出现非 schema 键，apply_delta.py 给 warning。
 

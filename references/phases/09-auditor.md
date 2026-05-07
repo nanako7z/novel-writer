@@ -229,9 +229,35 @@ Auditor 直接输出符合 inkos `AuditResult` 的 JSON：
       "description": "章末未交付 memo 中 'goal: 揭示老李身份' 的兑现",
       "suggestion": "在最后一段补一句让老李说出真实身份" }
   ],
-  "summary": "主线推进到位但 memo goal 未兑现，需 polish/spot-fix"
+  "summary": "主线推进到位但 memo goal 未兑现，需 polish/spot-fix",
+  "docDriftCandidates": [
+    {
+      "target": "characterMatrix",
+      "reason": "林秋-二师姐 intimacy 在 ch10/11/12 三章正文里持续负向，但 character_matrix.md 仍记 +3",
+      "suggestedOp": "update_row",
+      "evidence": ["ch10","ch11","ch12"]
+    }
+  ]
 }
 ```
+
+### `docDriftCandidates`（建议性，Auditor 不直接落盘）
+
+Auditor **不**自己产 docOps——保持只读职责。如果 Auditor 检测到正文与某指导 md **连续 ≥ 3 章**矛盾（用 `chapter_summaries.json` 滑窗判断），把候选写到 `docDriftCandidates` 数组：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `target` | enum | `currentFocus` / `styleGuide` / `characterMatrix` / `emotionalArcs` / `subplotBoard` / `storyFrame` / `volumeMap` / `roles` |
+| `reason` | string | 为什么认为该 md 偏离了正文 |
+| `suggestedOp` | enum | `replace_section` / `update_row` / 等（参 schema §7b） |
+| `evidence` | array<string> | 支撑证据章节列表（如 `["ch10","ch11","ch12"]`） |
+
+落地通路：候选写到 `story/runtime/chapter-{NNNN}.audit-r{i}.json` 的 `docDriftCandidates` 字段。**下章** Settler 的 user message 里会自动拼一段"上章 Auditor 建议改 md"，由 Settler 决定是否把它落成真实 docOps（`sourcePhase: "auditor-derived"`）。Auditor 自己不动指导文件——避免自循环（同章 Auditor 改完 matrix 让自己合规）。
+
+**触发原则**：
+- drift candidate **不计入** critical / score——纯建议
+- 不要为偶发偏离开 candidate；至少连续 3 章
+- 不要建议改 author_intent / book_rules / fanfic_canon / parent_canon —— 这些是宪法
 
 字段形状与解析容错（4 种 JSON 提取策略 + 字段级 regex fallback）见：
 
