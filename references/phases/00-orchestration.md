@@ -85,6 +85,25 @@ function writeNextChapter(book):
         # 走 Reviewer 内部降级，不消耗 Architect 重做预算。
         runArchitect(book, fanficCanon if fanfic mode)
 
+        # ── 4a. Architect cascade docOps（必跑）────────────────
+        # references/phases/04-architect.md §"Cascade docOps"
+        # Architect 重写 outline 后，会**额外**产一份 docOps 同步下游
+        # 受影响的指导 md（current_focus / roles/<slug> 等），写到
+        # story/runtime/architect-cascade.delta.json。这一步**不能省略**——
+        # 否则 outline 改了但 current_focus 还引用旧 hookId，下游 Planner
+        # 拿到的就是失同步的指导。
+        if exists("story/runtime/architect-cascade.delta.json"):
+            python scripts/apply_delta.py --book <bookDir> \
+                --delta story/runtime/architect-cascade.delta.json \
+                --skip-hook-governance --skip-commitment-ledger \
+                --skip-book-metadata
+            # 应用后归档（重命名带章号），避免下章误用：
+            mv story/runtime/architect-cascade.delta.json \
+               story/runtime/architect-cascade.applied-{NNNN}.delta.json
+        # 失败处理：cascade 失败时**报 warning 但不 abort**——下游 Planner
+        # 会读到 drift；如果 docOps 漂移扫描（step 11.0c）在下章发现明显
+        # 失同步会再 flag 一次。
+
     # ── 5. Write ───────────────────────────────────────────
     # references/phases/05-writer.md
     rawWriter = runWriter(
@@ -345,6 +364,22 @@ function writeNextChapter(book):
     # 失败处理：非 fatal——记 warning 但不 abort。drift 是写给下章
     # Planner 看的"建议性记录"，本章正文已落盘；下次写章 Planner
     # 没读到 drift 也只是少了一条避坑提示，不会污染真理状态。
+
+    # ── 11.0c docOps 漂移扫描（指导 md 是否陈旧）─────────────
+    # references/schemas/runtime-state-delta.md §7b
+    # 扫近 N 章（默认 6）的 chapter_summaries，flag 明显的"应该已经被
+    # docOps 改但没改"的指导 md：
+    #   - current_focus.md 引用的章节远落后于 lastAppliedChapter
+    #   - chapter_summaries.characters 里持续出场但 character_matrix /
+    #     roles/ 都没条目的角色
+    #   - events 文本里疑似支线 ID 但 subplot_board 无对应行
+    #   - mood 连续 3 章不变但 emotional_arcs 没记录
+    # 输出 advisory 候选到 story/runtime/docops_drift.json，下一章
+    # Settler prompt 装配时会拼入 user message（"上章 docOps drift 建议"），
+    # 由 Settler 决定是否落实。
+    #   python scripts/docops_drift.py --book <bookDir> --window 6 --write
+    # 失败处理：非 fatal——脚本自带 exit 0（advisory），无候选时自动
+    # 删除旧 docops_drift.json，不留陈旧。
 
     # ── 11.05 Chapter Analyzer (post-persist 定性回顾) ─────────
     # references/phases/13-analyzer.md

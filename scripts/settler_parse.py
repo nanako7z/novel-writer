@@ -410,6 +410,35 @@ def soft_fix(delta: Any, fixes: list[dict] | None = None) -> tuple[Any, list[dic
                 fixes.append({"path": f"$.{arr_key}", "fix": "wrap_in_array", "from": "object"})
                 delta[arr_key] = [v]
 
+    # docOps: inject empty object if missing — this enforces the "every chapter
+    # explicitly declares whether it touched any guidance md" semantic without
+    # breaking legacy callers. Settler is expected to actively output docOps
+    # going forward (or at minimum `{}`), and the soft-fix entry tells it so.
+    if "docOps" not in delta:
+        fixes.append({
+            "path": "$.docOps",
+            "fix": "inject_empty_default",
+            "note": ("Settler did not declare a docOps field; injected `{}`. "
+                     "Every chapter should explicitly produce docOps even if "
+                     "empty, to confirm the chapter triggered no guidance-md "
+                     "changes."),
+        })
+        delta["docOps"] = {}
+    elif delta["docOps"] is None:
+        fixes.append({"path": "$.docOps", "fix": "coerce_null_to_empty_object"})
+        delta["docOps"] = {}
+
+    if "newRoleCandidates" in delta:
+        nrc = delta["newRoleCandidates"]
+        if nrc is None:
+            fixes.append({"path": "$.newRoleCandidates", "fix": "drop_null_array"})
+            del delta["newRoleCandidates"]
+        elif isinstance(nrc, dict):
+            fixes.append({
+                "path": "$.newRoleCandidates", "fix": "wrap_in_array", "from": "object",
+            })
+            delta["newRoleCandidates"] = [nrc]
+
     return delta, fixes
 
 

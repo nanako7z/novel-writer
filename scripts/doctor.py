@@ -101,6 +101,7 @@ EXPECTED_SCRIPTS = [
     "book_lock.py",
     "doc_ops.py",
     "role_arbitrate.py",
+    "docops_drift.py",
     "e2e_test.py",
 ]
 

@@ -159,6 +159,7 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "改 author_intent / book_rules / fanfic_canon / parent_canon"（作者宪法） | LLM 直接 `Edit` 对应文件后，调 `python scripts/apply_delta.py --book <bookDir> log-direct-edit --file <path> --reason "..."` 补审计日志；不走 `.bak` |
 | "看哪些 md 被改过 / 谁改的" | `cat story/runtime/doc_changes.log` |
 | "回滚某次 docOp" | `python scripts/apply_delta.py --book <bookDir> revert-doc-op --op-id <sha8>`（仅适用于走 docOps 落盘的；宪法直 Edit 用 `git checkout` 或手动恢复） |
+| "扫一下指导 md 是不是写脏了 / docops drift" | `python scripts/docops_drift.py --book <bookDir> --window 6 [--write]`（advisory；step 11.0c 每章自动跑；候选写到 `story/runtime/docops_drift.json` 喂下章 Settler） |
 
 ## 同人 / 风格分支
 
