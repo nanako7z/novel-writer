@@ -23,7 +23,8 @@ Foundation Reviewer **不是 top-level phase**——它是 [phase 04 Architect](
 - **language**：`zh | en`
 - **genre profile**：`templates/genres/<book.genre>.md`（题材底色，用于判断节奏维度是否合理）
 - **book.json**：title / genre / targetChapters / chapterWordCount
-- **可选**：`fanfic_canon.md`（fanfic / series 模式必传，前 8000 字）；`style_guide.md`（如有，前 2000 字）
+- **fanfic_canon.md**（前 8000 字）：fanfic / series 模式**必传**，其他模式可省。
+- **style_guide.md**（前 2000 字）：可选，存在即传。
 
 ## 系统 prompt（搬自 inkos `foundation-reviewer.ts` L100-128，请 Claude 在心中扮演这个角色）
 

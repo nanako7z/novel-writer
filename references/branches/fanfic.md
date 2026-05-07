@@ -21,11 +21,9 @@ inkos fanfic init --mode <canon|au|ooc|cp> --from <source-file>
 
 **SKILL 还原流程**：
 
-1. 用户调用：`scripts/init_book.py --fanfic --mode <mode> --from <path>`，脚本完成常规 init（拷模板 + 写 `inkos.json` / `book.json`，并把 `fanficMode` 字段写入 `book.json`）。
-2. SKILL.md 的同人分支段提示 Claude：读 `<source-file>` 全文（必要时截断到 50000 字符），然后用本文件第 4 节"canon 抽取 prompt"在对话中跑一次抽取，**输出按 5 个 SECTION 解析**，最后以本文件第 8 节"输出契约"组装成 `story/fanfic_canon.md` 落盘。
-3. 之后写第 1 章前，Writer 会同时拼接 `MODE_PREAMBLES[mode]`（第 2 节）与 `fanfic_canon.md`，自检阶段再附加 `MODE_CHECKS[mode]`（第 3 节）。
-
-`<source-file>` 限制：原文若超过 50000 字符自动截断，并在 prompt 末尾追加截断说明。
+1. 用户调 `scripts/init_book.py --fanfic --mode <mode> --from <path>`，脚本完成 init 并把 `fanficMode` 字段写入 `book.json`。
+2. SKILL.md 的同人分支段提示 Claude：读 `<source-file>` 全文（> 50000 字符自动截断，prompt 末尾附截断说明），用本文件第 5 节 "canon 抽取 prompt" 跑抽取，输出按 `=== SECTION: <name> ===` 切成 5 段，再按第 8 节"输出契约"拼装落盘到 `story/fanfic_canon.md`。
+3. 之后写第 1 章前，Writer 拼 `MODE_PREAMBLES[mode]`（第 2 节）+ `fanfic_canon.md`；自检阶段附加 `MODE_CHECKS[mode]`（第 3 节）。
 
 ---
 
@@ -80,7 +78,7 @@ inkos fanfic init --mode <canon|au|ooc|cp> --from <source-file>
 - 关系发展应有节奏感：推进、试探、阻碍、突破
 ```
 
-> 此外，从 `fanfic_canon.md` 的"## 角色档案"表格中提取的角色行，会被组装成"## 角色语音参照（同人写作专用）"块附加到 Writer prompt 末尾，每个角色给出口头禅 / 说话风格 / 典型行为三项（缺项即跳过）。
+> 此外，从 `fanfic_canon.md` "## 角色档案"表格中抽出的角色行，会拼成"## 角色语音参照（同人写作专用）"块附加到 Writer prompt 末尾，每角色给口头禅 / 说话风格 / 典型行为三项，缺项即跳过（强化角色辨识度，是同人读者最在意的字段）。
 
 ---
 

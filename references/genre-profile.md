@@ -1,8 +1,8 @@
 # Genre Profile（题材规则）
 
-> 移植自 inkos `packages/core/src/models/genre-profile.ts`（schema）+ `agents/rules-reader.ts`（loader）+ `agents/writer-prompts.ts`（注入 Writer）+ `agents/continuity.ts`（注入 Auditor）。本文件说明 SKILL 怎么读 / 用 / 扩展题材规则。
+> 题材规则（GenreProfile）是单本书的 **L1 规则层**——四级规则栈最底层（见 [rule-stack.md](rule-stack.md)）。本文件说明 SKILL 怎么读 / 用 / 扩展。
 
-题材规则（GenreProfile）是**单本书的"L1 规则层"**——四级规则栈最底层（见 `references/rule-stack.md`）。它由两部分组成：YAML frontmatter（结构化字段，被 prompt 拼装与 audit 维度过滤直接消费）+ markdown body（题材专属禁忌 / 修炼规则 / 节奏指导，整段灌进 Writer 的"题材规范"段）。
+由两部分组成：YAML frontmatter（结构化字段，被 prompt 拼装与 audit 维度过滤直接消费）+ markdown body（题材专属禁忌 / 修炼规则 / 节奏指导，整段灌进 Writer 的"题材规范"段）。
 
 ## 1. YAML frontmatter schema
 

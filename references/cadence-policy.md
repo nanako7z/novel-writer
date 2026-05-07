@@ -1,6 +1,6 @@
 # Cadence Policy（节奏 / 爽点节拍政策）
 
-> 题材 profile 里那一行 `pacingRule:` 是**全书静态规则**——它告诉 Writer "每 3-5 章应有一次小突破"，但它不知道我们**实际**走到第几章、距离上次爽点已经隔了几章。Cadence Policy 把节奏管控分成 4 个层次（chapter / volume / book / arc），用 `cadence_check.py` 把"该不该埋个爽点"这件事**算成数字**喂给 Planner。
+> 把题材 profile 的 `pacingRule:`（全书静态规则，"每 3-5 章应有一次小突破"）扩展成**当前章实际节奏压力**——用 4 层节拍（chapter / volume / book / arc）把"该不该埋个爽点"算成数字喂给 Planner，由 `cadence_check.py` 实现。
 
 ## 4 层节拍模型
 

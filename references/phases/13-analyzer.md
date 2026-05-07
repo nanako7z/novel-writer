@@ -2,7 +2,7 @@
 
 ## 何时进入
 
-主循环在「写下一章」流程中、章节正文已落盘到 `chapters/{NNNN}.md`、真理文件已经过 `apply_delta.py` 写入、Polisher（如有）已跑完之后调到这里。具体位置：在 [phase 00 orchestration](00-orchestration.md) 的 **step 11（最终章节正文落盘 + manifest 更新）之后、step 11.1 (consolidate_check) 之前**——挂作 step 11.05。换句话说，本章一切已成定局（正文、真理文件、polish 都不会再动），下一章的 [Planner（phase 02）](02-planner.md) 还没启动。
+主循环 step 11.05——章节正文已落盘到 `chapters/{NNNN}.md`、真理文件已 `apply_delta.py` 写入、Polisher 跑完之后；下一章 [Planner](02-planner.md) 还没启动之前（见 [00-orchestration.md](00-orchestration.md)）。本章一切定局，正文 / 真理文件 / polish 都不会再动。
 
 Chapter Analyzer 的角色是**单向只读的复盘者**：它读已经定稿的章节正文与本章的 `chapter_memo.md`、audit 结果、题材 profile，做一次定性回顾，把"本章击中了哪些满足类型 / 触发了哪些节奏拍 / 留下了什么可复用桥段 / 下章 Planner 必须正面回应的信号"产出为结构化分析文件。**绝不修改章节正文、`story/state/*.json`、`pending_hooks.md` 或任何真理文件**。
 

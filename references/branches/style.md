@@ -5,9 +5,7 @@
 两件产物是独立的：
 
 - `story/style_profile.json`——纯文本统计指纹（5 类指标），由 `scripts/style_analyze.py` 产出，**不调用 LLM**
-- `story/style_guide.md`——定性叙事声音分析，由 Claude 跑本文件第 4 节的 LLM prompt 产出，可选
-
-`--stats-only` 模式下只产 JSON，不跑 LLM。
+- `story/style_guide.md`——定性叙事声音分析，由 Claude 跑本文件第 4 节 LLM prompt 产出，**可选**（`--stats-only` 或不跑 §4 即跳过）
 
 ---
 
@@ -19,7 +17,7 @@
         ├─ scripts/style_analyze.py ref.txt --book <bookId>
         │       └─ 产出 story/style_profile.json（确定性）
         │
-        └─ （可选）Claude 用本文件 §4 LLM prompt 跑定性分析
+        └─ Claude 用本文件 §4 LLM prompt 跑定性分析（可选）
                 └─ 产出 story/style_guide.md
         ↓
 05-writer 阶段：
@@ -27,7 +25,7 @@
   - 若 style_guide.md 存在且非占位符，注入 buildStyleGuide(text) → "## 文风指南"块
 ```
 
-参考文本最低长度（来自 runner.ts L2004）：500 字符；推荐 ≥ 2000 字符以保证统计稳定。
+参考文本最低 500 字符（runner.ts L2004），推荐 ≥ 2000 字让 §2.3 指标稳定。
 
 ---
 
@@ -60,7 +58,7 @@
 | `avgParagraphLength` | `paragraphs` 长度均值，四舍五入到整数 |
 | `paragraphLengthRange` | `{ min, max }` 段落长度，整数 |
 | `vocabularyDiversity` (TTR) | 字符级 Type-Token Ratio：先把 `text` 做 `replace(/[\s\n\r，。！？、：；""''（）【】《》\d]/g, "")` 过滤标点空白数字，再计算 `unique chars / total chars`，保留 3 位小数 |
-| `topPatterns` | 取每句首 2 字符作 key 计数 → 按计数降序取前 5 → **过滤计数 ≥ 3 的项**，格式 `<两字>...(<count>次)` |
+| `topPatterns` | 取每句首 2 字符作 key 计数 → 按计数降序取前 5 → **只保留计数 ≥ 3 的项**，格式 `<两字>...(<count>次)` |
 | `rhetoricalFeatures` | 见下表，命中数 ≥ 2 的才进数组，格式 `<名称>(<n>处)` |
 
 ### 2.4 修辞特征正则表（`RHETORICAL_PATTERNS`，逐字搬）
@@ -86,11 +84,9 @@
 python scripts/style_analyze.py <ref.txt> --book <bookId> [--stats-only]
 ```
 
-- 不传 `--stats-only`：脚本只跑统计写 JSON；定性分析由 SKILL 在对话里跑。
-- 传 `--stats-only`：等价上面，但显式声明跳过 LLM 阶段。
-- 失败：参考文本 < 500 字符、文件不存在 → 非零退出 + stderr 报错。
+脚本始终只产 JSON 不跑 LLM；`--stats-only` 仅是显式声明跳过 §4 LLM 阶段（语义等价，便于 CI 表达意图）。失败：参考文本 < 500 字符、文件不存在 → 非零退出 + stderr 报错。
 
-定性分析（生成 `style_guide.md`）由 Claude 在主流程里调，**不写在脚本里**。
+定性分析（生成 `style_guide.md`）由 Claude 在主流程里调，**不写在脚本里**——避免脚本依赖 Anthropic API 凭据。
 
 ---
 
@@ -139,9 +135,9 @@ ${referenceText.slice(0, 20000)}
 
 调用参数：`temperature: 0.3`。
 
-**输入截断**：参考文本超过 20000 字符时只取前 20000（runner.ts 中的 `slice(0, 20000)`）。
+**输入截断**：参考文本在 §4 prompt 的 user message 中截断至前 20000 字符（runner.ts 的 `slice(0, 20000)`）。
 
-**输出后处理**：原版会在 LLM 回复尾部追加 `craftMethodology`（来自 `buildWritingMethodologySection(lang)`）；SKILL 移植时不强制——可以让 Claude 直接把 LLM 回复落到 `style_guide.md`，方法论段落由 05-writer 自己的"创作宪法"段提供。
+**输出后处理**：原版会在 LLM 回复尾部追加 `craftMethodology`（来自 `buildWritingMethodologySection(lang)`）。SKILL 移植不再追加——05-writer 已有"创作宪法"段提供方法论，避免重复注入。Claude 直接把 LLM 回复落到 `style_guide.md` 即可。
 
 ---
 

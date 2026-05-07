@@ -2,7 +2,7 @@
 
 ## 何时进入
 
-主循环在「写下一章」流程中、Composer 之前调到这里。每一章都要跑一次 Planner，产物是 `story/runtime/chapter_memo.md`，由下游 Composer 读入装配上下文，再由 Writer 按 memo 扩写正文。Planner 不写正文。
+主循环 step 2，Composer 之前。每章必跑，产物 `story/runtime/chapter_memo.md`——下游 Composer 装上下文 + Writer 按 memo 扩写。Planner 不写正文。
 
 ## Inputs
 

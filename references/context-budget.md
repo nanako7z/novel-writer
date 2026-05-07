@@ -1,22 +1,15 @@
 # Context Budget Enforcement
 
-End-of-Composer hardening (gap item #11). Caps per-category char usage of
-`context_pkg.json` and sheds content by priority before injection into the
-Writer prompt.
+Composer 末段的硬化闸门：按 category 给 `context_pkg.json` 设字符上限，注入 Writer prompt 前按优先级丢内容。
 
 ## 为什么需要它
 
-inkos 的 `buildGovernedContextPackage` 在 TS 层就把每个 category 砍到上限；
-SKILL 形态下 Composer 是"读 + 拼"流程，没有这层闸门。后果：
+inkos 的 `buildGovernedContextPackage` 在 TS 层就把每 category 砍到上限；SKILL 形态下 Composer 是"读 + 拼"流程，没这层闸门。后果：
 
-- 30+ 章后 `recentSummaries` / `relevantSummaries` 越拼越胖，挤掉
-  `currentState` / `activeHooks` / `auditDriftGuidance` 等承重段。
-- Writer 看到的 `context_package.json` 表面段全在，实质上 hook 段被 token
-  截断（且无任何提示）。
+- 30+ 章后 `recentSummaries` / `relevantSummaries` 越拼越胖，挤掉 `currentState` / `activeHooks` / `auditDriftGuidance` 等承重段。
+- Writer 看到的 `context_package.json` 表面段全在，实际 hook 段已被 token 截断（且无提示）。
 
-`scripts/context_budget.py` 在 Composer 步骤 5（写盘前）做最后一道处理，按
-固定 profile 把超载部分**结构化**地砍掉（drop 旧章 / 压缩条目 / 删去已结
-支线），而不是简单尾截。
+`scripts/context_budget.py` 在 Composer step 5（写盘前）做最后处理：按固定 profile **结构化地**砍超载部分（drop 旧章 / 压缩条目 / 删已结支线），而非简单尾截。
 
 ## 触发位置
 

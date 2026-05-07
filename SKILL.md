@@ -1,11 +1,11 @@
 ---
 name: novel-writer
-description: 中文网文写作工作流（移植自 inkos CLI）。当用户要写小说、网文、同人或长篇虚构故事时使用，覆盖项目初始化、写下一章、审章/改章、风格模仿、同人 canon/AU/OOC/CP 设置、伏笔治理（含揭1埋1硬底线 + payoff 可定位）、章节文字打磨、卷级摘要压缩等场景。流水线 Plan → Compose → (Architect+FoundationReviewer) → Write → 写后检 → Normalize → Audit → Revise → Settle → (Polish)，含 15 个题材 profile、37 个审计维度、9 类事实追踪、四级规则栈、伏笔生命周期治理、滑窗记忆、3 阶段 Settler delta 解析、看点密集度 300/500/1500 三档硬尺、段落 40-120 字反碎片硬尺、去 AI 味与敏感词扫描、章节卷级压缩。即使用户没明说"用 novel-writer"，只要意图是写网文章节、做长篇连载、做同人创作或做风格模仿写作，都应主动用此 skill。**不要触发**于一次性短文、产品文档、PRD、技术博客、诗词歌赋、剧本/编剧、学术论文这类非长篇虚构连载的场景。
+description: 中文网文 / 长篇连载 / 同人 / 风格模仿写作工作流（移植自 inkos CLI）。覆盖立项、写下一章、审改、伏笔治理（揭 1 埋 1 + payoff 定位）、文字打磨、卷级压缩。13 阶段流水线 Plan→Compose→(Architect)→Write→写后检→Normalize→Audit→Revise→Settle→(Polish)→Analyze→(Consolidate)，含 15 题材 profile、37 审计维度、9 类事实追踪、四级规则栈、滑窗记忆、3 阶段 Settler delta 解析、段落 40–120 字反碎片硬尺、去 AI 味与敏感词扫描。用户在 `books/<id>/` 下做任何写作动作、说"写第 N 章"/"起一本新书"/"审一下这章"/"我想写《X》同人"/"学这段风格再写"，都应主动触发——即使没明说"用 novel-writer"。**不触发**：一次性短文、产品文档、PRD、技术博客、诗词、剧本、学术论文。
 ---
 
 # novel-writer
 
-把 [inkos CLI](https://github.com/Narcooo/inkos) 的多 agent 网文写作流水线，移植成可在 Claude Code 里直接驱动的 SKILL。
+[inkos CLI](https://github.com/Narcooo/inkos) 多 agent 网文写作流水线的 Claude Code 移植。
 
 ## 触发与不触发
 
@@ -78,18 +78,18 @@ python {SKILL_ROOT}/scripts/init_book.py \
 
 ## 主循环：写下一章
 
-详细伪代码 + 顺序见 [references/phases/00-orchestration.md](references/phases/00-orchestration.md)。简版：
+完整伪代码见 [references/phases/00-orchestration.md](references/phases/00-orchestration.md)。一图：
 
 ```
 Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect) → Write
      → Normalize（脚本 + 必要时 phase 08）
-     → Audit-Revise（最多 3 轮，分数提升 < 3 即退出）
-     → Observe → Settle → apply_delta 校验（含 hook 治理闸门）
-     → (audit 真正过线 ≥88 时跑 Polisher 文字打磨)
+     → Audit-Revise（最多 3 轮；分数提升 < 3 即退出）
+     → Observe → Settle → apply_delta（hook 治理闸门）
+     → audit 过线 ≥88 时跑 Polisher
      → 章节正文写入 chapters/{NNNN}.md
 ```
 
-每个阶段读对应文件，**先看那个 phase 文件再动手**：
+每个阶段动手前先读对应 phase 文件：
 
 | Phase | 文件 | 摘要 |
 |---|---|---|
@@ -107,12 +107,12 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | 12 | [consolidator](references/phases/12-consolidator.md) | 卷级摘要压缩 + 历史归档（手动触发；先跑 `consolidate_check.py` 检测） |
 | 13 | [chapter analyzer](references/phases/13-analyzer.md) | 章节落盘后的定性回顾，写 `analysis.json` 喂下章 Planner（单向只读，不改任何真理文件） |
 
-**主循环关键不变量**（违反就停下）：
+**主循环关键不变量**：
 
-1. 真理文件（`story/state/*.json`、`pending_hooks.md` 等）只能经 `scripts/apply_delta.py` 修改，不直接编辑
-2. 章节正文落盘前必须经过 audit-revise 闸门——即便没过线也要标 `audit-failed-best-effort`
+1. 真理文件（`story/state/*.json`、`pending_hooks.md` 等）只能经 `scripts/apply_delta.py` 修改（避开 manifest 漂移与钩子治理失效）
+2. 章节正文落盘前必须经过 audit-revise 闸门——即便没过线也要标 `audit-failed-best-effort`（保证问责可追溯）
 3. 阶段产物先写到 `story/runtime/chapter-{NNNN}.<phase>.md`，最终成果才落到 `chapters/` 与 `story/state/`
-4. LLM 输出解析失败：Planner 重试 ≤ 3，Architect ≤ 2（含 [Foundation Reviewer](references/foundation-reviewer.md) 回环），audit-revise 整轮 ≤ 3
+4. LLM 输出解析失败：Planner 重试 ≤ 3，Architect ≤ 2（含 [Foundation Reviewer](references/foundation-reviewer.md) 回环），audit-revise 整轮 ≤ 3（上限来自 inkos 实证调参）
 5. Reflector **不是**单独阶段；其职责并入 audit-revise loop
 6. Writer 输出走 sentinel 格式 → `writer_parse.py` + `post_write_validate.py` 是 Normalize 之前的强制检查；critical 命中允许 Writer 重写一次
 
@@ -130,13 +130,13 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "校验一下真理文件没问题吧" | `python scripts/hook_governance.py --book <bookDir> --command validate` + `python scripts/chapter_index.py --book <bookDir> validate` |
 | "看下哪些章节待审 / 已通过 / review list" | `python scripts/chapter_index.py --book <bookDir> list --status ready-for-review`（或 `approved` / `audit-failed` 等） |
 | "把第 N 章标记为 approved / 已发布" | `python scripts/chapter_index.py --book <bookDir> set-status --chapter N --status approved`（或 `published` / `rejected`） |
-| "回滚到第 N 章那一刻 / 真理文件写脏了" | `python scripts/snapshot_state.py --book <bookDir> restore --chapter N [--dry-run]`（先 `list` / `diff`；snapshot 由 step 11.0a 自动产，详见 [state-snapshots.md](references/state-snapshots.md)） |
-| "看下上章审计还有什么没改干净 / drift" | `python scripts/audit_drift.py --book <bookDir> read --json`（drift 由 step 11.0b 自动写，下章 Planner 自动读；详见 [audit-drift.md](references/audit-drift.md)） |
-| "看下伏笔账兑现了没 / commitment ledger" | `python scripts/commitment_ledger.py --memo <chapter_memo.md> --draft <draft.md>`（audit 之前自动跑）|
+| "回滚到第 N 章那一刻 / 真理文件写脏了" | `python scripts/snapshot_state.py --book <bookDir> restore --chapter N [--dry-run]`（先 `list`/`diff`；详见 [state-snapshots.md](references/state-snapshots.md)） |
+| "看下上章审计还有什么没改干净 / drift" | `python scripts/audit_drift.py --book <bookDir> read --json`（详见 [audit-drift.md](references/audit-drift.md)） |
+| "看下伏笔账兑现了没 / commitment ledger" | `python scripts/commitment_ledger.py --memo <chapter_memo.md> --draft <draft.md>` |
 | "卷尾兑现率 / cross-volume payoff" | `python scripts/hook_governance.py --book <bookDir> --command volume-payoff --volume N` |
 | "看 audit 改了几轮 / stagnation" | `python scripts/audit_round_log.py --book <bookDir> --chapter N --analyze` |
 | "上下文太长了 / context 超 budget" | `python scripts/context_budget.py --input <context_pkg.json> --budget-total 80000`（composer step 5 自动调；hard-overflow 时给用户决策） |
-| "锁住正在写的书 / 防多 session 撞写" | `python scripts/book_lock.py --book <bookDir> --json {acquire/status/release}`（apply_delta + chapter_index 写命令自动调；详见 [book-lock.md](references/book-lock.md)） |
+| "锁住正在写的书 / 防多 session 撞写" | `python scripts/book_lock.py --book <bookDir> --json {acquire/status/release}`（详见 [book-lock.md](references/book-lock.md)） |
 | "压缩前面卷 / consolidate / 摘要太多了 / 历史压缩一下" | 先跑 `python scripts/consolidate_check.py --book <bookDir>` 看是否该压；该压则进 [phase 12 consolidator](references/phases/12-consolidator.md) |
 | "列出我所有书 / book list" | `python scripts/book.py list` |
 | "看下《XX》详情 / book show" | `python scripts/book.py show <bookId>` |
@@ -151,15 +151,15 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "导出 / 出版 / 打包成 epub/txt/md" | `python scripts/export_book.py --book <bookDir> --format txt\|md\|epub [--include-summary]` |
 | "看下跨章疲劳 / 是不是写重复了" | `python scripts/fatigue_scan.py --book <bookDir> --current-chapter N [--window 5]`（advisory） |
 | "节奏 / 爽点压力 / cadence" | `python scripts/cadence_check.py --book <bookDir> --current-chapter N`（Planner 阶段也会自动跑） |
-| "看下都有哪些题材 / list genres" | `python scripts/genre.py list [--json]`（同时列出 templates/genres/ 内置和 `<workdir>/genres/` 用户覆盖的 profile） |
+| "看下都有哪些题材 / list genres" | `python scripts/genre.py list [--json]` |
 | "看 xianxia 题材 profile / show genre" | `python scripts/genre.py show <id> [--json]` |
-| "新增自定义题材 / 复制 profile 改" | `python scripts/genre.py add <newId> --from <baseId> [--name "..."] [--out <path>]`（默认写到 `<workdir>/genres/<newId>.md`，需手动 edit） |
-| "校验题材 profile schema" | `python scripts/genre.py validate [<id>]`（不带 id 校验全部） |
+| "新增自定义题材 / 复制 profile 改" | `python scripts/genre.py add <newId> --from <baseId> [--name "..."] [--out <path>]` |
+| "校验题材 profile schema" | `python scripts/genre.py validate [<id>]` |
 | "调整章节焦点 / 角色关系 / 风格 / outline / role 档案"（白名单指导 md） | 走 user-directive docOps 流程（见 §"用户指令式调整设定"）——LLM 构造最小 docOps delta → 写到 `story/runtime/user-directive.delta.json` → 调 `apply_delta.py` |
 | "改 author_intent / book_rules / fanfic_canon / parent_canon"（作者宪法） | LLM 直接 `Edit` 对应文件后，调 `python scripts/apply_delta.py --book <bookDir> log-direct-edit --file <path> --reason "..."` 补审计日志；不走 `.bak` |
 | "看哪些 md 被改过 / 谁改的" | `cat story/runtime/doc_changes.log` |
 | "回滚某次 docOp" | `python scripts/apply_delta.py --book <bookDir> revert-doc-op --op-id <sha8>`（仅适用于走 docOps 落盘的；宪法直 Edit 用 `git checkout` 或手动恢复） |
-| "扫一下指导 md 是不是写脏了 / docops drift" | `python scripts/docops_drift.py --book <bookDir> --window 6 [--write]`（advisory；step 11.0c 每章自动跑；候选写到 `story/runtime/docops_drift.json` 喂下章 Settler） |
+| "扫一下指导 md 是不是写脏了 / docops drift" | `python scripts/docops_drift.py --book <bookDir> --window 6 [--write]`（advisory；候选喂下章 Settler） |
 
 ## 同人 / 风格分支
 
@@ -205,49 +205,42 @@ python {SKILL_ROOT}/scripts/sensitive_scan.py --file <draft.md>
 
 ### 路径 A：白名单指导 md（current_focus / style_guide / character_matrix / emotional_arcs / subplot_board / outline/* / roles/*）
 
-**禁止直接 `Edit`**——必须走 docOps user-directive 通道（保证 anchor 解析、表结构、`.bak` 备份、可回滚）。流程：
+**不直接 `Edit`**——走 docOps user-directive 通道，保证 anchor 解析 / 表结构 / `.bak` 备份 / 可回滚。流程：先 `Read` 对应 md 看清结构（H2 节名 / 表格列名），再写 `story/runtime/user-directive.delta.json`：
 
-1. LLM 先 `Read` 对应 md，看清结构（H2 节名 / 表格列名）
-2. 构造一份最小 docOps delta，注意：
-   - `sourcePhase: "user-directive"`
-   - `sourceChapter`: 当前 `manifest.lastAppliedChapter`（不知道就用 0）
-   - `reason`: 引用作者原话，≤ 200 chars
-3. 写到 `story/runtime/user-directive.delta.json`，形如：
-   ```json
-   {
-     "chapter": <lastAppliedChapter>,
-     "docOps": {
-       "currentFocus": [{
-         "op": "replace_section",
-         "anchor": "## Active Focus",
-         "newContent": "...",
-         "reason": "用户：把焦点从 X 切到 Y",
-         "sourcePhase": "user-directive",
-         "sourceChapter": <lastAppliedChapter>
-       }]
-     }
-   }
-   ```
-4. 调 `python scripts/apply_delta.py --book <bookDir> --delta story/runtime/user-directive.delta.json --skip-hook-governance --skip-commitment-ledger --skip-book-metadata`
-5. 把 `docOpsApplied` 列表回执给作者
+```json
+{
+  "chapter": <manifest.lastAppliedChapter, 缺省 0>,
+  "docOps": {
+    "currentFocus": [{
+      "op": "replace_section",
+      "anchor": "## Active Focus",
+      "newContent": "...",
+      "reason": "用户：把焦点从 X 切到 Y",     // ≤ 200 chars，引作者原话
+      "sourcePhase": "user-directive",
+      "sourceChapter": <lastAppliedChapter>
+    }]
+  }
+}
+```
+
+然后 `python scripts/apply_delta.py --book <bookDir> --delta story/runtime/user-directive.delta.json --skip-hook-governance --skip-commitment-ledger --skip-book-metadata`，把 `docOpsApplied` 回执作者。
 
 ### 路径 B：作者宪法（author_intent / book_rules / fanfic_canon / parent_canon）
 
-这四个文件**自动通道永远只读**（schema 阶段就拒），但**作者明示指令时 LLM 可直接 `Edit`**——这是作者主权例外。流程：
+这四个文件**自动通道永远只读**（schema 阶段就拒），但作者明示指令时 LLM 可直接 `Edit`——作者主权例外。流程：
 
 1. LLM 直接 `Edit` 目标文件（`book_rules` = `book.json#bookRules` 子树）
-2. **必须**调一次 helper 命令补齐审计日志：
+2. 调 helper 补审计日志（必走，写入 `story/runtime/doc_changes.log`，`opId` 自动 SHA8）：
    ```bash
    python scripts/apply_delta.py --book <bookDir> log-direct-edit \
        --file story/author_intent.md --reason "用户：把核心命题改成 X"
    ```
-   helper 会自动读 `manifest.lastAppliedChapter` 作章节号，写入 `story/runtime/doc_changes.log` 一行 NDJSON（`sourcePhase: "user-directive-direct-edit"`，`opId` 自动 SHA8）。`--reason` 上限 200 chars。
-3. 不走 `.bak`——宪法变更频次低，靠 git 或手动备份兜底；`revert-doc-op` 对 direct_edit 不支持，要回滚用 `git checkout` 或手工恢复
-4. 完成后把 helper 回执的 `opId` 告诉作者
+3. 不走 `.bak`——宪法变更频次低，靠 git 或手动备份兜底。`revert-doc-op` 对 direct_edit 不支持；回滚走 `git checkout`。
+4. 把 helper 回执的 `opId` 告诉作者
 
-### LLM 自己起意改任何 md → **永远禁止**
+### LLM 自己起意改任何 md → 必须先问作者
 
-如果 LLM 觉得"这条焦点该推进了"但作者没明示——**必须先问作者**，得到明确指令后再决定走 A 还是 B。Settler / Architect 通过自动 docOps 通道改白名单 md 是合法的（因为本章正文实际触发），但跳出主循环的"主动改"必须由作者授权。
+如果 LLM 觉得"这条焦点该推进了"但作者没明示，**先问作者**再决定走 A 还是 B（防止隐性设定漂移）。Settler / Architect 通过自动 docOps 改白名单 md 是合法的——因为有本章正文驱动；跳出主循环的"主动改"必须由作者授权。
 
 ## 真理文件契约
 
@@ -272,9 +265,7 @@ apply_delta 的具体行为：
 - `stale-scan` 标记过期钩子 → 不阻断，但写回 `stale: true` 标志供后续 Planner 参考
 - 想跳过治理（不推荐）：`apply_delta.py --skip-hook-governance`
 
-调试 Settler 输出时（不写盘只看解析结果）：`python scripts/settler_parse.py --input <raw.md> --mode raw --out /tmp/d.json`。钩子治理逻辑见 [references/hook-governance.md](references/hook-governance.md)。
-
-直接编辑 `story/state/*.json` 视为脏写，会污染 manifest，**禁止**。
+调试 Settler 输出时（不写盘只看解析结果）：`python scripts/settler_parse.py --input <raw.md> --mode raw --out /tmp/d.json`。钩子治理逻辑见 [references/hook-governance.md](references/hook-governance.md)。直写 `story/state/*.json` 视为脏写——见上方主循环不变量 #1。
 
 ## 规则栈与题材 profile
 
@@ -284,12 +275,9 @@ apply_delta 的具体行为：
 
 ### 题材 catalog 管理
 
-用 [`scripts/genre.py`](scripts/genre.py)（`list / show / add / validate`）。查找顺序是 **user override 优先于 bundled**：
+用 [`scripts/genre.py`](scripts/genre.py)（`list / show / add / validate`）。查找顺序：`<workdir>/genres/<id>.md`（user override，可选）→ `{SKILL_ROOT}/templates/genres/<id>.md`（15 内置）。
 
-1. `<workdir>/genres/<id>.md`（用户自建/覆盖；可选目录）
-2. `{SKILL_ROOT}/templates/genres/<id>.md`（15 个内置）
-
-加自定义题材：`python scripts/genre.py add wuxia --from xianxia --name 武侠`（会在 `<workdir>/genres/wuxia.md` 落地一份从 xianxia 拷贝、id/name 已替换的骨架，提示用户手 edit 内容）。`book.json#genre` 写新 id 即生效。
+加自定义题材：`python scripts/genre.py add wuxia --from xianxia --name 武侠`，落地骨架到 `<workdir>/genres/wuxia.md`，作者手 edit 内容；`book.json#genre` 写新 id 即生效。
 
 ## 滑窗记忆
 
@@ -348,7 +336,6 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── audit_drift.py           上章 audit 未达标 issues 持久化（喂下章 Planner；step 11.0b 自动跑）
 │   ├── audit_round_log.py       audit-revise 每轮 artifact（step 7 每轮自动跑；--analyze 检测停滞）
 │   ├── commitment_ledger.py     hook 账兑现校验（audit 前 step 7a 自动跑）
-│   ├── genre.py                 题材 catalog 管理（list/show/add/validate；user override-first）
 │   ├── context_budget.py        Composer step 5：13 类预算强制 + drop priority
 │   ├── book_lock.py             advisory 写锁（acquire/release/status；apply_delta + chapter_index 自动调）
 │   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook 仲裁 + governance）
@@ -382,8 +369,8 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 
 ## 注意事项
 
-- **不要凭印象编 prompt**：每个 phase 文件里的"系统 prompt"块都搬自 inkos 源码，请整段照用，不要改写。改 prompt 等于改风格基线。
-- **流程长但不要跳步**：哪怕用户催"快点写"，也要按主循环走——跳过 audit/observer 会让真理文件越写越脏，后面无法继续创作。
-- **首次失败不慌**：Planner / Architect / audit-revise 都内置重试上限。到达上限仍失败，老老实实告诉用户哪里不通过，不要伪造通过。
-- **保持中文**：所有面向作者和角色的文本都是中文。脚本日志可以英文。
-- **不写 README**：本 SKILL 内不带 README；用法直接看本 SKILL.md 即可。
+- **照搬 inkos 系统 prompt**：每个 phase 文件里的"系统 prompt"块都从 inkos 源码搬来——整段照用，改 prompt 等于改风格基线。
+- **不跳步**：用户催"快点写"也按主循环走——跳过 audit/observer 会让真理文件越写越脏，后面无法继续创作。
+- **失败如实回报**：Planner / Architect / audit-revise 都内置重试上限；到达上限仍失败，告诉用户哪里不通过，不伪造通过。
+- **保持中文**：面向作者和角色的文本都是中文，脚本日志可以英文。
+- **不写 README**：用法直接看本 SKILL.md。

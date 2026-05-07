@@ -2,9 +2,9 @@
 
 ## 何时进入
 
-主循环在 Writer 写完正文之后、Settler 之前调到这里。Observer 的工作是从刚写完的正文里**穷举**所有可观察事实变化（9 类），输出 `=== OBSERVATIONS ===` 块给下游 Settler 用。Observer 不写真理文件，只产出观察日志；真理文件由 Settler 在 Observer 的输出基础上做增量更新。
+主循环 step 8，Writer 之后、Settler 之前。从正文**穷举**可观察事实变化（9 类），输出 `=== OBSERVATIONS ===` 块给 Settler 增量更新真理文件。Observer 自身不写真理文件。
 
-宁多勿少：Observer 的本职是过度抽取，让 Settler 去做合并与过滤。
+**宁多勿少**：Observer 过度抽取，由 Settler 做合并过滤——这是本阶段的设计原则。
 
 ## Inputs
 

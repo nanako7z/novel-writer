@@ -1,6 +1,6 @@
 # Rule Stack（四级规则栈）
 
-> 端口自 `inkos` 的 `utils/context-assembly.ts` 中 `buildGovernedRuleStack`（L36-83），以及 `models/input-governance.ts` 中 `RuleStackSchema` / `ActiveOverride` 定义。本文档说明四级规则的优先级、覆盖契约、写入位置，以及 Writer / Reviser / Auditor 三个阶段如何消费这套栈。
+> 四级规则的优先级、覆盖契约、写入位置，以及 Writer / Reviser / Auditor 怎么消费这套栈（移植自 inkos `buildGovernedRuleStack` + `RuleStackSchema`）。
 
 ## 四层规则与 precedence
 

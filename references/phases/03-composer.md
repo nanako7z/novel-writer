@@ -2,7 +2,7 @@
 
 ## 何时进入
 
-主循环在 Planner 之后、Architect/Writer 之前调到这里。Composer 不调 LLM、不做语义判断；它只是把多份真理文件按章节焦点筛一遍，拼成三份 runtime 工件（contextPackage / ruleStack / chapterTrace）写到 `story/runtime/`，作为 Writer 的"输入清单"。
+主循环 step 3，Planner 之后、Architect/Writer 之前。**确定性流程，不调 LLM**——把真理文件按章节焦点筛一遍，拼成三份 runtime 工件（contextPackage / ruleStack / chapterTrace）落到 `story/runtime/` 给 Writer 用。
 
 ## Inputs
 

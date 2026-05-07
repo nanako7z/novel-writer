@@ -2,7 +2,7 @@
 
 ## 何时进入
 
-主循环在 Observer 之后、Normalizer/Auditor 之前调到这里。Settler 把 Observer 的观察日志 + 章节正文与现有真理文件做增量合并，输出 `=== POST_SETTLEMENT ===`（人读摘要）+ `=== RUNTIME_STATE_DELTA ===`（机器读 JSON）。Delta JSON 经 `scripts/apply_delta.py` 校验后落到真理文件。
+主循环 step 9，Observer 之后、Normalizer/Auditor 之前。Settler 把 Observer 观察日志 + 章节正文与现有真理文件做增量合并，输出 `=== POST_SETTLEMENT ===`（人读摘要）+ `=== RUNTIME_STATE_DELTA ===`（机器读 JSON）。Delta JSON 经 `scripts/apply_delta.py` 校验后落到真理文件。
 
 ## Inputs
 
