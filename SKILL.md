@@ -1,6 +1,6 @@
 ---
 name: novel-writer
-description: 中文网文写作工作流（移植自 inkos CLI）。当用户要写小说、网文、同人或长篇虚构故事时使用，覆盖项目初始化、写下一章、审章/改章、风格模仿、同人 canon/AU/OOC/CP 设置、伏笔治理、章节文字打磨、卷级摘要压缩等场景。流水线 Plan → Compose → (Architect+FoundationReviewer) → Write → 写后检 → Normalize → Audit → Revise → Settle → (Polish)，含 15 个题材 profile、37 个审计维度、9 类事实追踪、四级规则栈、伏笔生命周期治理、滑窗记忆、3 阶段 Settler delta 解析、去 AI 味与敏感词扫描、章节卷级压缩。即使用户没明说"用 novel-writer"，只要意图是写网文章节、做长篇连载、做同人创作或做风格模仿写作，都应主动用此 skill。**不要触发**于一次性短文、产品文档、PRD、技术博客、诗词歌赋、剧本/编剧、学术论文这类非长篇虚构连载的场景。
+description: 中文网文写作工作流（移植自 inkos CLI）。当用户要写小说、网文、同人或长篇虚构故事时使用，覆盖项目初始化、写下一章、审章/改章、风格模仿、同人 canon/AU/OOC/CP 设置、伏笔治理（含揭1埋1硬底线 + payoff 可定位）、章节文字打磨、卷级摘要压缩等场景。流水线 Plan → Compose → (Architect+FoundationReviewer) → Write → 写后检 → Normalize → Audit → Revise → Settle → (Polish)，含 15 个题材 profile、37 个审计维度、9 类事实追踪、四级规则栈、伏笔生命周期治理、滑窗记忆、3 阶段 Settler delta 解析、看点密集度 300/500/1500 三档硬尺、段落 40-120 字反碎片硬尺、去 AI 味与敏感词扫描、章节卷级压缩。即使用户没明说"用 novel-writer"，只要意图是写网文章节、做长篇连载、做同人创作或做风格模仿写作，都应主动用此 skill。**不要触发**于一次性短文、产品文档、PRD、技术博客、诗词歌赋、剧本/编剧、学术论文这类非长篇虚构连载的场景。
 ---
 
 # novel-writer

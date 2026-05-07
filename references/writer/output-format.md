@@ -35,9 +35,12 @@
 > === UPDATED_EMOTIONAL_ARCS ===
 > === UPDATED_CHARACTER_MATRIX ===
 > === POST_WRITE_ERRORS ===      (optional — Writer 自报本章违规)
+> === HOOK_PAYOFF_AUDIT ===      (optional — Writer 自检 advance/resolve 兑现锚)
 > ```
 >
 > 如果 Writer 自检中发现任何已经写入正文但来不及修的违规（如疲劳词超限、节奏漂移），可以把每条违规按一行一条写在末尾的 `=== POST_WRITE_ERRORS ===` 块里，下游 reviser 会读这份清单优先修。
+>
+> `=== HOOK_PAYOFF_AUDIT ===` 是 commit `ab39bd6` 落地的可选自检块——Writer 写完初稿后，把本章 `advance / resolve` 的每个 `hook_id` 列下来，对照正文找出"对应那段 ≥ 60 字、含可观察动作 / 对话 / 物件" 的 prose 锚段，把 anchor 文本的前 ≤ 80 字粘进去（不是再写一遍正文，是粘正文里某一段的开头）。Settler 拿到这个块直接对照，落空即 `dirty=true` 触发 Reviser；没有这个块时由 [`scripts/commitment_ledger.py`](../../scripts/commitment_ledger.py) 在正文里 fallback 搜锚。
 >
 > 一切对 sentinel 的"美化"——加 markdown `##`、加序号、改大小写、合并区块、把短的合并成 inline 行——都会让 `writer_parse.py --strict` 报错并触发回写循环。Writer 不要自作聪明。
 
@@ -120,6 +123,14 @@
 - **关系**: 某角色(关系性质/Ch#) | ...
 - **已知**: 该角色已知的信息（仅限亲历或被告知）
 - **未知**: 该角色不知道的信息
+
+=== HOOK_PAYOFF_AUDIT ===   ← 可选；强烈建议 Writer 在 advance / resolve 非空时输出
+（写完初稿后自检，把本章 advance / resolve 的每个 hook_id 列下来，对照正文找出 ≥ 60 字、含可观察动作 / 对话 / 物件 的 prose 锚段，粘锚段前 ≤ 80 字。仅纯内心提及不算兑现，必须能指到一段动作 / 对话）
+
+| hook_id | 标签 | 锚段前 80 字（粘正文片段，不要再写一遍） |
+|---------|------|------------------------------------------|
+| H001 | advance | 主角伸手翻开父亲留下的旧信，手指在泛黄的纸页上停了停... |
+| H002 | resolve | 他握住玉牌，玉牌上的纹路在月光下泛冷，他对身边的师弟说... |
 ```
 
 #### 14.B Creative-only 输出（`mode == "creative"`）

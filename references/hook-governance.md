@@ -91,6 +91,56 @@ stale    = (not resolved) AND startChapter > 0 AND distance > halfLife
 
 ---
 
+## 4b. 揭 1 埋 1 硬底线 + payoff 可定位约束（新增，移植自 inkos commit `b1cc3a7` + `ab39bd6`）
+
+> 这一节把 inkos `hook-ledger-validator.ts` 里的"揭 1 埋 1"硬底线和 `writer-prompts.ts` 里的"hook 兑现段必须可定位"硬约束端口到 SKILL。两条规则都进入 `hook_governance.py --command validate`，severity = `critical`，会被 apply_delta.py 闸门拦下。
+
+### 规则 A — 揭 1 埋 1 硬底线（番茄老师弈青锋）
+
+本章 `chapter_memo.hook_ops` 满足：
+
+- 计 `resolved_count = len(hook_ops.resolved)`、`new_open_count = len(hook_ops.opened)`
+- 当 `resolved_count > 0` 时，**必须 `new_open_count >= resolved_count`**
+- 违反 → `code: REVEAL_BURY_FLOOR, severity: critical`，章节判退、不进 Settler
+
+`new_open_count` 字段会一并落进 `story/state/hook_ledger.json` 的本章行，给 reviewer / commitment ledger 后续读。
+
+> **设计要点**：planner P14 推荐"揭 1 埋 2"——这是劝导，不卡；hook_governance 卡的是"揭 1 埋 1"硬底线——劝导和硬尺分层放置，给作者留松紧。
+
+### 规则 B — payoff 可定位约束（番茄老师弈青锋）
+
+本章 `chapter_memo.hook_ops.advance` ∪ `hook_ops.resolved` 里出现的**每一个 `hook_id`**，必须在正文 prose 里有一段**可定位兑现场景**：
+
+- 长度 **≥ 60 字**
+- 含**可观察动作 / 对话 / 物件**（人物对着具体物件 / 事件 / 信息做出可观察的动作或交谈）
+- **纯内心回想不算**——"他想起借条还在抽屉里"不算兑现，必须实际伸手摸到 / 看到 / 拿起 + 做出动作
+- defer 不需要 prose 锚；open 只需在章末附近有一个自然引出的种子即可
+
+违反 → `code: HOOK_PAYOFF_UNLOCATED, severity: critical`，章节判退。
+
+### Writer 自检契约
+
+Writer 写完初稿后必须自检一遍 hook 账：把 `advance / resolve` 的每个 `hook_id` 列下来，对照正文，确认每一条都能指向一段带具体动作 / 物件 / 对话的 prose 段。指不到 → 回去补写；不要提交"账本在 memo 里、正文里没落"的稿子。
+
+可选地，Writer 在 14.A 全量输出模式下额外输出 `=== BLOCK: HOOK_PAYOFF_AUDIT ===` 区块，把每个 hook_id → prose anchor 对照表显式列出（详见 [writer/output-format.md §14.A.HOOK_PAYOFF_AUDIT](writer/output-format.md)）。Settler 拿到这个块就直接对照；没有这个块时由 hook_governance.py 在正文里 fallback 搜锚。
+
+### 与 §4 的合表关系
+
+| 类别 | 严重度 | 触发条件 |
+|---|---|---|
+| `REVEAL_BURY_FLOOR` | **critical** | `resolved_count > 0 && new_open_count < resolved_count` |
+| `HOOK_PAYOFF_UNLOCATED` | **critical** | `advance ∪ resolved` 里某个 hook_id 在正文找不到 ≥ 60 字、含可观察动作 / 对话 / 物件的兑现段 |
+
+两条都跟 §4 的 `dep_cycle` 同级，是 apply_delta.py 的硬闸。
+
+### 配套 schema 变更
+
+- `story/state/hook_ledger.json` 新增字段 `newOpenCount: int`（每章一行的本章打开计数）
+- `_constants.py` 新增违规码 `REVEAL_BURY_FLOOR / HOOK_PAYOFF_UNLOCATED`
+- `_schema.py` 在 hook_ledger schema 里把 `newOpenCount` 标为 required（旧仓库无此字段时由 `apply_delta.py` 自动补 0，向后兼容）
+
+---
+
 ## 5. Health metrics（health-report 命令）
 
 每条 hook 输出：

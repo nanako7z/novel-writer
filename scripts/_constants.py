@@ -81,3 +81,14 @@ PLATFORM: frozenset[str] = frozenset({
 FANFIC_MODE: frozenset[str] = frozenset({
     "canon", "au", "ooc", "cp",
 })
+
+# ---- commitment ledger violation codes (commit b1cc3a7 + ab39bd6) ---------
+# Severity = critical for both. Mirrored into commitment_ledger.py output and
+# read by apply_delta.py as part of the chapter-truth-validation gate.
+LEDGER_VIOLATION_REVEAL_BURY_FLOOR = "REVEAL_BURY_FLOOR"
+LEDGER_VIOLATION_HOOK_PAYOFF_UNLOCATED = "HOOK_PAYOFF_UNLOCATED"
+
+# Minimum prose window (in CJK chars) that a hook payoff scene must occupy
+# in the chapter draft to satisfy commit ab39bd6's "concretely locatable
+# payoff scene" rule. Pure inner-recall is not enough.
+HOOK_PAYOFF_MIN_CHARS = 60

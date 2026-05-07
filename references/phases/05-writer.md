@@ -30,7 +30,7 @@
 
 ## Process
 
-Writer system prompt 由以下 14 个具名子段按需拼装。每段的"作用 / 何时启用 / verbatim 中文 prompt"详情已下沉到对应 sub-reference 文件。本 phase 文件只给概览表 + 拼装顺序 + §10 / §11 两处简短指针段。
+Writer system prompt 由以下 14 + 1 个具名子段按需拼装（§7.5 是 commit `b1cc3a7` 落地的密度纪律插槽，置于 §7 之后、§8 之前）。每段的"作用 / 何时启用 / verbatim 中文 prompt"详情已下沉到对应 sub-reference 文件。本 phase 文件只给概览表 + 拼装顺序 + §10 / §11 两处简短指针段。
 
 ### Process 概览表（按拼装顺序）
 
@@ -39,10 +39,11 @@ Writer system prompt 由以下 14 个具名子段按需拼装。每段的"作用
 | 1 | 题材引言 | 恒启 | [genre-injection §1](../writer/genre-injection.md) | 定身份与平台 |
 | 2 | 输入治理契约 + 章节备忘对齐 | governed 模式 | [governed-context §2](../writer/governed-context.md) | chapter_memo 7 段必须落地 |
 | 3 | LengthSpec 字数治理 | 恒启 | [governed-context §3](../writer/governed-context.md) | 5 区间值 target/soft/hard |
-| 4 | 写作工艺卡（14 craft rules） | 恒启 | [craft-and-anti-ai §4](../writer/craft-and-anti-ai.md) | 选下一句的判据 |
+| 4 | 写作工艺卡（14 craft rules + 段落字数硬尺） | 恒启 | [craft-and-anti-ai §4 / §4.X](../writer/craft-and-anti-ai.md) | 选下一句的判据；§4.X 段落 40-120 字 / 短段 ≤ 5 / 连续短段 ≤ 2 |
 | 5 | 创作宪法（14 原则散文版） | 恒启 | [craft-and-anti-ai §5](../writer/craft-and-anti-ai.md) | internalise，never quote |
 | 6 | 沉浸感六支柱 | 恒启 | [craft-and-anti-ai §6](../writer/craft-and-anti-ai.md) | 每场景前几页静默立柱 |
-| 7 | 黄金开场纪律（前 3 章） | chapterNumber ≤ 3 | [golden-opening §7](../writer/golden-opening.md) | 7.A 散文版 + 7.B 列表版 |
+| 7 | 黄金开场纪律（前 3 章） | chapterNumber ≤ 3 | [golden-opening §7](../writer/golden-opening.md) | 7.A 散文版 + 7.B 列表版；前 300 字反转钩 / 开篇人物 ≤ 2 / 80/20 断章 |
+| 7.5 | 看点密集度（番茄老师鎏旗，硬尺） | 恒启 | [density-discipline §7.5](../writer/density-discipline.md) | 300 字爽点 / 500 字钩子 / 1000-1500 字完整悬念 |
 | 8 | 题材规则 + 主角铁律 | 8.A 恒启 / 8.B 见条件 | [genre-injection §8.A](../writer/genre-injection.md) + [book-rules §8.B](../writer/book-rules.md) | L1 题材 + L2 主角，冲突取 L2 |
 | 9 | book_rules + style_guide | 见各小节条件 | [book-rules §9](../writer/book-rules.md) | 全书规则正文 + 文风指南 |
 | 10 | （条件）Fanfic Canon | `book.json#fanficMode != null` | 简短指针段 inline 见下 → [branches/fanfic.md](../branches/fanfic.md) | canon > 题材 body |
@@ -50,7 +51,7 @@ Writer system prompt 由以下 14 个具名子段按需拼装。每段的"作用
 | 11.5 | 题材 profile 注入 | 恒启 | [genre-injection §11.5](../writer/genre-injection.md) | frontmatter 字段扇出到多段 |
 | 12 | 去 AI 味铁律 + 硬性禁令 | 恒启 | [craft-and-anti-ai §12](../writer/craft-and-anti-ai.md) | 5 类典型 AI 痕迹 + 3 条硬性禁令 |
 | 13 | 全员追踪 | `enableFullCastTracking == true` | [book-rules §13](../writer/book-rules.md) | POST_SETTLEMENT 多角色清单 |
-| 14 | 输出格式契约（OUTPUT FORMAT） | 恒启（full/creative 分支） | [output-format §14](../writer/output-format.md) | sentinel verbatim 大写 |
+| 14 | 输出格式契约（OUTPUT FORMAT） | 恒启（full/creative 分支） | [output-format §14](../writer/output-format.md) | sentinel verbatim 大写；14.A 末尾可选 `=== HOOK_PAYOFF_AUDIT ===` 自检块 |
 
 > 段号不连续是正常的——§11.5 是从 inkos 移植时为兼容已有段号在 §11 之后插入的 "题材联动" 总开关，不是排版错误。
 
@@ -118,7 +119,7 @@ audit-revise 循环最多 3 轮，分数提升 < 3 即提前退出（沿用 inko
 
 ## 注意事项
 
-1. **拼装顺序不可变**：题材引言 → 输入治理 → 章节备忘 → 长度规格 → 工艺卡 → 创作宪法 → 沉浸支柱 → 黄金开场 → 题材+主角 → 本书规则+文风 → fanfic → style → 去 AI 味 → 全员追踪 → 输出格式。任意调换会让 Writer 把上下文优先级搞反（例如长度规格被推到题材规则之后，Writer 会把题材本能凌驾于硬区间之上）。
+1. **拼装顺序不可变**：题材引言 → 输入治理 → 章节备忘 → 长度规格 → 工艺卡（含 §4.X 段落字数硬尺） → 创作宪法 → 沉浸支柱 → 黄金开场（前 3 章）→ **看点密集度 §7.5** → 题材+主角 → 本书规则+文风 → fanfic → style → 去 AI 味 → 全员追踪 → 输出格式。任意调换会让 Writer 把上下文优先级搞反（例如长度规格被推到题材规则之后，Writer 会把题材本能凌驾于硬区间之上）。
 2. **§5 创作宪法 / §6 沉浸支柱 / §10-11 fanfic+style 是"内化"段**：写作时必须避免把段落里的小标题、关键词原样复述到正文（"这一刻他终于明白了什么是 show don't tell"——这是最严重的 AI 味）。Auditor dim 24（叙述者姿态）会重点抓这种自我引用。
 3. **黄金开场（§7）只在 chapterNumber ≤ 3 注入**：第 4 章及之后整段移除，以免把"开篇约束"误用到中卷。
 4. **fanfic 与 style 是正交的**：可以同时启用（同人 + 风格模仿），两段都要注入；任一缺失就跳过对应整段。

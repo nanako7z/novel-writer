@@ -254,6 +254,85 @@ def draft_echoes_entry(draft: str, entry: dict) -> bool:
     return hid in draft
 
 
+_CJK_CHAR_RE = re.compile(r"[一-鿿]")
+
+
+def _cjk_char_count(text: str) -> int:
+    return len(_CJK_CHAR_RE.findall(text or ""))
+
+
+# Observable-action markers: any of these in the payoff window indicates a
+# concretely locatable scene (per inkos commit ab39bd6 "explicit characters
+# acting on or talking about a specific object/event/information").
+# Pure inner-recall ("他想起借条") doesn't qualify because none of these are
+# exclusively observable — we additionally accept dialogue-quote pairs as
+# observable speech.
+_OBSERVABLE_ACTION_RE = re.compile(
+    r"(?:看|见|瞧|盯|望|注视|"           # eyes
+    r"拿|抓|握|捧|接|拾起|抽出|摸|触|按|"  # hand
+    r"推|拉|转身|走|跑|跨|站起|坐下|倒|跪|蹲|"  # body
+    r"说|道|喊|叫|问|答|笑|骂|喃喃|低语|嘟囔|"  # mouth
+    r"拍|撞|砸|敲|投|扔|抛|"            # impact
+    r"写|画|撕|折|交|递|塞|抽|"          # interaction
+    r"伸手|挪|举|按下|按住"
+    r")"
+)
+# Also accept Chinese / English quoted dialogue as observable speech.
+_DIALOGUE_QUOTE_RE = re.compile(r"[“\"][^“”\"]+[”\"]|「[^」]+」")
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    if not text:
+        return []
+    raw = re.split(r"\n\s*\n+", text)
+    return [p.strip() for p in raw if p and p.strip()]
+
+
+def draft_payoff_window_ok(draft: str, entry: dict,
+                           min_chars: int = 60) -> bool:
+    """Stricter check than draft_echoes_entry: require that at least one
+    paragraph containing an entry keyword is itself ≥ min_chars CJK chars
+    AND contains an observable action verb or a dialogue-quote pair.
+
+    Implements the "concretely locatable payoff scene" rule from inkos
+    commit ab39bd6 (writer-prompts.ts hard-correspondence rule for
+    advance/resolve hooks).
+    """
+    keywords = [k for k in (entry.get("keywords") or []) if k]
+    if not keywords:
+        # No descriptor → fall back to plain id presence (existing behaviour).
+        return draft_echoes_entry(draft, entry)
+
+    paragraphs = _split_paragraphs(draft)
+    if not paragraphs:
+        return False
+
+    draft_lower = draft.lower()
+    for para in paragraphs:
+        para_lower = para.lower()
+        # Check any keyword hits this paragraph.
+        keyword_hit = False
+        for kw in keywords:
+            if re.match(r"^[a-z]", kw):
+                if kw in para_lower:
+                    keyword_hit = True
+                    break
+            else:
+                if kw in para:
+                    keyword_hit = True
+                    break
+        if not keyword_hit:
+            continue
+        if _cjk_char_count(para) < min_chars:
+            continue
+        if _OBSERVABLE_ACTION_RE.search(para) or _DIALOGUE_QUOTE_RE.search(para):
+            return True
+    # If we got here, the keyword exists somewhere but no paragraph satisfies
+    # both length + observable-action constraints.
+    _ = draft_lower  # suppress lint, kept for parity with draft_echoes_entry.
+    return False
+
+
 def dedupe_by_id(entries: list[dict]) -> list[dict]:
     seen: set[str] = set()
     out: list[dict] = []
@@ -332,7 +411,36 @@ def validate(memo_text: str, draft_text: str,
     committed = dedupe_by_id(list(ledger["advance"]) + list(ledger["resolve"]))
 
     violations: list[dict] = []
+
+    # ---- Reveal-bury floor (inkos commit b1cc3a7 hook-ledger-validator).
+    # When this chapter resolves any hook, it must open at least the same
+    # number of new hooks. Planner P14 recommends "reveal 1, bury 2" but the
+    # hard floor enforced here is "reveal 1, bury 1".
+    resolved_count = len(ledger.get("resolve", []) or [])
+    open_count = len(ledger.get("open", []) or [])
+    if resolved_count > 0 and open_count < resolved_count:
+        violations.append({
+            "severity": "critical",
+            "category": "REVEAL_BURY_FLOOR",
+            "hookId": None,
+            "description": (
+                f"本章 resolve 了 {resolved_count} 个钩子，但 open 段只埋了 "
+                f"{open_count} 个新钩子，违反“揭 1 埋 1”硬底线"
+                f"（番茄老师弈青锋）"
+            ),
+            "suggestion": (
+                "在 memo 的 open 段补足新钩子数量到 ≥ resolve 数；推荐"
+                "“揭 1 埋 2”——新钩子最好与刚揭的钩子有因果关联，不要"
+                "凭空冒出来"
+            ),
+            "resolvedCount": resolved_count,
+            "newOpenCount": open_count,
+        })
+
     for entry in committed:
+        # Layer 1: existing keyword-echo check (catches missing landings
+        # entirely). Keeps the legacy violation code alive for
+        # backward-compatible exit codes / tests.
         if not draft_echoes_entry(draft_text, entry):
             violations.append({
                 "severity": "critical",
@@ -346,6 +454,29 @@ def validate(memo_text: str, draft_text: str,
                     f"在正文中加入对 {entry['hookId']} 的具体情节推进"
                     f"（动作、对话、环境变化），或把它从 hook 账里"
                     f"移到 defer 并给出理由"
+                ),
+                "keywords": entry.get("keywords", []),
+            })
+            continue
+        # Layer 2: stricter window check (inkos commit ab39bd6). Keyword
+        # exists but the surrounding paragraph either is too short or
+        # carries no observable action / dialogue — pure inner-recall
+        # doesn't qualify as a payoff scene.
+        if not draft_payoff_window_ok(draft_text, entry):
+            violations.append({
+                "severity": "critical",
+                "category": "HOOK_PAYOFF_UNLOCATED",
+                "hookId": entry["hookId"],
+                "description": (
+                    f"hook {entry['hookId']} 在正文中能找到关键词，但所在段落 "
+                    f"< 60 字 或 没有可观察动作 / 对话——纯内心提及不算"
+                    f"兑现（番茄老师弈青锋）"
+                ),
+                "suggestion": (
+                    f"把 {entry['hookId']} 的兑现段扩成 ≥ 60 字、含具体"
+                    f"动作（看 / 拿 / 推 / 说 等）或对话引语；"
+                    f"“他想起借条还在抽屉里”这类内心提及要替换成"
+                    f"“他伸手抽出抽屉里的借条” 这类可观察动作"
                 ),
                 "keywords": entry.get("keywords", []),
             })
@@ -384,11 +515,14 @@ def validate(memo_text: str, draft_text: str,
         f"resolve={len(ledger['resolve'])} "
         f"defer={len(ledger['defer'])} "
         f"open={len(ledger['open'])} "
+        f"newOpenCount={len(ledger['open'])} "
         f"violations={len(violations)}"
     )
     return {
         "ok": len(violations) == 0,
         "ledger": ledger,
+        "newOpenCount": len(ledger["open"]),
+        "resolvedCount": len(ledger["resolve"]),
         "violations": violations,
         "summary": summary,
     }
