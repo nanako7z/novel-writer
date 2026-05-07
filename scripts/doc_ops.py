@@ -80,6 +80,17 @@ TABLE_KEY_COLUMNS: dict[str, tuple[int, ...]] = {
     "subplotBoard":    (0,),     # subplotId
 }
 
+# Canonical column NAMES for the key columns above. Used when bootstrapping
+# a brand-new table file via upsert_row to guarantee the key columns end up
+# at the indices declared in TABLE_KEY_COLUMNS — without this, header order
+# == list(fields.keys()) and the first non-key field accidentally becomes
+# column 0.
+_CANONICAL_KEY_COLS: dict[str, tuple[str, ...]] = {
+    "characterMatrix": ("charA", "charB"),
+    "emotionalArcs":   ("character", "chapter"),
+    "subplotBoard":    ("subplotId",),
+}
+
 # Optional column order for emit (None → preserve incoming header).
 # Headers come from the existing file when present.
 
@@ -273,42 +284,115 @@ def _join_sections(parts: Iterable[tuple[str, str]]) -> str:
     return "".join(out)
 
 
-def _apply_section_op(text: str, op: dict) -> tuple[str, str | None]:
-    """Apply one SectionReplaceOp; return (new_text, error_or_None)."""
+def _sanitize_new_content(new_content: str, anchor: str) -> tuple[str, list[str]]:
+    """Strip leaked structural artifacts from `newContent`.
+
+    Notices accumulated:
+    - `stripped_leading_anchor`: newContent started with the anchor line
+      itself (a common LLM mistake — the anchor goes in `anchor`, the
+      body goes in `newContent`).  Without stripping, every replace_section
+      doubles the heading on disk; on the next read the file's section list
+      gets a phantom new entry that future replaces can't reach.
+    - `embedded_h2_lines`: newContent contains *other* `## ` / `### ` lines
+      mid-stream.  Less harmful than the leading-anchor case but on the
+      next read those lines split the section, so we record a warning so
+      the caller can flag it.  We do NOT strip these — they may be
+      legitimate H4+ misformatted, and silent removal would lose data.
+    """
+    notices: list[str] = []
+    if not isinstance(new_content, str):
+        return "", notices
+
+    # Strip leading anchor (and its blank-line padding) if present.
+    text = new_content.lstrip("\n")
+    anchor_stripped = anchor.strip()
+    while True:
+        head, sep, rest = text.partition("\n")
+        if head.strip() == anchor_stripped:
+            text = rest.lstrip("\n")
+            notices.append("stripped_leading_anchor")
+            continue
+        break
+
+    # Detect mid-stream H2/H3 lines that are NOT the original anchor (those
+    # we can't detect as accidental — they may be intended sub-sections of
+    # the body or genuine other sections; we just flag).
+    other_headings = [
+        m.group(0) for m in _HEADING_RE.finditer(text)
+        if m.group(0).strip() != anchor_stripped
+    ]
+    if other_headings:
+        notices.append(
+            f"embedded_h2_lines: {len(other_headings)} non-anchor heading(s) "
+            f"in newContent; they will split the section on next read"
+        )
+
+    return text, notices
+
+
+def _apply_section_op(text: str, op: dict) -> tuple[str, str | None, list[str]]:
+    """Apply one SectionReplaceOp; return (new_text, error_or_None, notices).
+
+    `notices` is a list of soft-warning strings (e.g. "stripped_leading_anchor")
+    that the caller can surface via warnings or doc_changes.log; they don't
+    indicate failure.
+    """
+    notices: list[str] = []
     kind = op.get("op")
     anchor = op.get("anchor")
-    new_content = op.get("newContent", "")
+    new_content_raw = op.get("newContent", "")
     if kind not in VALID_SECTION_OPS:
-        return text, f"invalid section op: {kind!r}"
+        return text, f"invalid section op: {kind!r}", notices
     if not isinstance(anchor, str) or not anchor.strip():
-        return text, "anchor must be non-empty string"
+        return text, "anchor must be non-empty string", notices
     if not anchor.startswith("## ") and not anchor.startswith("### "):
-        return text, "anchor must start with '## ' or '### '"
+        return text, "anchor must start with '## ' or '### '", notices
+
+    new_content, sanitize_notices = _sanitize_new_content(new_content_raw, anchor)
+    notices.extend(sanitize_notices)
 
     parts = _split_into_sections(text)
-    idx = next(
-        (i for i, (h, _) in enumerate(parts) if h.strip() == anchor.strip()),
-        -1,
-    )
+    matching_indices = [
+        i for i, (h, _) in enumerate(parts) if h.strip() == anchor.strip()
+    ]
 
     if kind == "replace_section":
-        if idx < 0:
-            return text, f"anchor not found: {anchor!r}"
+        if not matching_indices:
+            return text, f"anchor not found: {anchor!r}", notices
         body = new_content if new_content.endswith("\n") else new_content + "\n"
         if not body.startswith("\n"):
             body = "\n" + body
-        parts[idx] = (anchor, body)
-        return _join_sections(parts), None
+        # Replace the FIRST occurrence with the new body.
+        first_idx = matching_indices[0]
+        parts[first_idx] = (anchor, body)
+        # If duplicates exist (file was already dirty), drop them — keeping
+        # multiple same-anchor sections breaks future replaces.  Iterate from
+        # tail so indices stay valid.
+        if len(matching_indices) > 1:
+            for dup_idx in reversed(matching_indices[1:]):
+                parts.pop(dup_idx)
+            notices.append(
+                f"deduped_duplicate_anchors: removed {len(matching_indices) - 1} "
+                f"redundant {anchor!r} section(s) to keep the file canonical"
+            )
+        return _join_sections(parts), None, notices
 
     if kind == "delete_section":
-        if idx < 0:
-            return text, f"anchor not found: {anchor!r}"
-        parts.pop(idx)
-        return _join_sections(parts), None
+        if not matching_indices:
+            return text, f"anchor not found: {anchor!r}", notices
+        # Remove ALL occurrences of the anchor (defensive against duplicates).
+        for dup_idx in reversed(matching_indices):
+            parts.pop(dup_idx)
+        if len(matching_indices) > 1:
+            notices.append(
+                f"deleted_duplicate_anchors: removed {len(matching_indices)} "
+                f"section(s) matching {anchor!r}"
+            )
+        return _join_sections(parts), None, notices
 
     # append_section
-    if idx >= 0:
-        return text, f"append_section but anchor already exists: {anchor!r}"
+    if matching_indices:
+        return text, f"append_section but anchor already exists: {anchor!r}", notices
     body = new_content if new_content.endswith("\n") else new_content + "\n"
     if not body.startswith("\n"):
         body = "\n" + body
@@ -317,7 +401,7 @@ def _apply_section_op(text: str, op: dict) -> tuple[str, str | None]:
         last_h, last_b = parts[-1]
         parts[-1] = (last_h, last_b + "\n")
     parts.append((anchor, body))
-    return _join_sections(parts), None
+    return _join_sections(parts), None, notices
 
 
 # ──────────────────────────── table ops ────────────────────────────────────
@@ -406,21 +490,33 @@ def _normalize_op_key(op_key, key_cols: tuple[int, ...]) -> tuple[str, ...]:
 
 def _apply_table_op(
     text: str, op: dict, key_cols: tuple[int, ...], target: str
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, list[str]]:
+    """Apply a TableRowOp; return (new_text, error_or_None, notices)."""
+    notices: list[str] = []
     kind = op.get("op")
     if kind not in VALID_TABLE_OPS:
-        return text, f"invalid table op: {kind!r}"
+        return text, f"invalid table op: {kind!r}", notices
 
     preamble, header, rows, postamble = _parse_table_block(text)
     if not header:
         # bootstrap: no table yet — only upsert_row may create one (need fields)
         if kind != "upsert_row":
-            return text, "table not found in file (only upsert_row may bootstrap)"
+            return text, "table not found in file (only upsert_row may bootstrap)", notices
         fields = op.get("fields") or {}
         if not isinstance(fields, dict) or not fields:
-            return text, "upsert_row on empty file requires non-empty 'fields' dict"
-        # use ordered keys from fields as header
-        header = list(fields.keys())
+            return text, "upsert_row on empty file requires non-empty 'fields' dict", notices
+        # Bootstrap header: place key column NAMES at their declared positions
+        # first, then append remaining fields. Without this, header order =
+        # list(fields.keys()) — meaning the first non-key field could
+        # accidentally become column 0, breaking _row_key on next reads.
+        canonical_key_names = _CANONICAL_KEY_COLS.get(target, ())
+        ordered: list[str] = []
+        for name in canonical_key_names:
+            ordered.append(name)
+        for k in fields.keys():
+            if k not in ordered:
+                ordered.append(k)
+        header = ordered
         rows = []
         # preserve full original text as preamble; ensure trailing newline
         preamble = text if text.endswith("\n") else text + "\n"
@@ -429,10 +525,30 @@ def _apply_table_op(
     try:
         op_key = _normalize_op_key(op.get("key"), key_cols)
     except ValueError as e:
-        return text, str(e)
+        return text, str(e), notices
 
     # build column-name → index map for fields-based mutation
     col_idx = {name: i for i, name in enumerate(header)}
+
+    # Defense: refuse to let `fields` mutate the row's primary key. The op's
+    # `key` is the only authoritative identifier — letting fields override
+    # would let upsert(key=A, fields={charA:B}) silently relocate the row,
+    # violating "key is immutable primary".
+    fields_in = op.get("fields") or {}
+    if isinstance(fields_in, dict):
+        forbidden_field_names = {
+            header[c] for c in key_cols if c < len(header)
+        }
+        sanitized_fields = {}
+        for k, v in fields_in.items():
+            if k in forbidden_field_names:
+                notices.append(
+                    f"dropped_key_field: fields[{k!r}] would mutate primary "
+                    f"key column; ignored (use op.key, not fields)"
+                )
+                continue
+            sanitized_fields[k] = v
+        op = {**op, "fields": sanitized_fields}
 
     # locate existing row
     match_idx = next(
@@ -442,24 +558,24 @@ def _apply_table_op(
 
     if kind == "delete_row":
         if match_idx < 0:
-            return text, f"delete_row: key not found: {list(op_key)}"
+            return text, f"delete_row: key not found: {list(op_key)}", notices
         rows.pop(match_idx)
     elif kind == "update_row":
         if match_idx < 0:
-            return text, f"update_row: key not found: {list(op_key)}"
+            return text, f"update_row: key not found: {list(op_key)}", notices
         fields = op.get("fields") or {}
         if not isinstance(fields, dict):
-            return text, "update_row: 'fields' must be object"
+            return text, "update_row: 'fields' must be object", notices
         row = rows[match_idx] + [""] * max(0, len(header) - len(rows[match_idx]))
         for k, v in fields.items():
             if k not in col_idx:
-                return text, f"update_row: unknown column {k!r}"
+                return text, f"update_row: unknown column {k!r}", notices
             row[col_idx[k]] = "" if v is None else str(v)
         rows[match_idx] = row
     elif kind == "upsert_row":
         fields = op.get("fields") or {}
         if not isinstance(fields, dict):
-            return text, "upsert_row: 'fields' must be object"
+            return text, "upsert_row: 'fields' must be object", notices
         # build row: start from existing if present, else empty
         if match_idx >= 0:
             row = rows[match_idx] + [""] * max(0, len(header) - len(rows[match_idx]))
@@ -485,41 +601,43 @@ def _apply_table_op(
             rows.append(row)
 
     new_text = (preamble or "") + _render_table(header, rows) + (postamble or "")
-    return new_text, None
+    return new_text, None, notices
 
 
 # ──────────────────────────── role ops ─────────────────────────────────────
 
 
-def _apply_role_op(book: Path, op: dict) -> tuple[Path | None, str | None, str | None, str | None]:
-    """Returns (target_path, before_text_or_None, after_text, error_or_None).
+def _apply_role_op(book: Path, op: dict) -> tuple[Path | None, str | None, str | None, str | None, list[str]]:
+    """Returns (target_path, before_text_or_None, after_text, error_or_None, notices).
 
     `before_text` is None when the file did not exist before (create_role,
     rename source). `target_path` is the path that ended up modified
     (post-rename for rename_role; new file path for create_role).
+    `notices` is a list of soft-warning strings from section sanitation.
     """
+    notices: list[str] = []
     kind = op.get("op")
     if kind not in VALID_ROLE_OPS:
-        return None, None, None, f"invalid role op: {kind!r}"
+        return None, None, None, f"invalid role op: {kind!r}", notices
 
     slug = op.get("slug")
     err = _validate_slug(slug)
     if err:
-        return None, None, None, err
+        return None, None, None, err, notices
 
     if kind == "create_role":
         tier = op.get("tier") or DEFAULT_ROLE_TIER
         if tier not in VALID_ROLE_TIERS:
             return None, None, None, (
                 f"invalid tier {tier!r}; must be one of {list(VALID_ROLE_TIERS)}"
-            )
+            ), notices
         # refuse if a file with this stem already exists anywhere under roles/
         existing = [p for p in _list_existing_role_files(book) if p.stem == slug.strip()]
         if existing:
             return None, None, None, (
                 f"create_role: file already exists at {existing[0].relative_to(book)}; "
                 "use patch_role_section or rename_role"
-            )
+            ), notices
         new_path = _role_create_path(book, slug, tier)
         display_name = (op.get("displayName") or slug).strip()
         body = op.get("initialContent")
@@ -528,46 +646,47 @@ def _apply_role_op(book: Path, op: dict) -> tuple[Path | None, str | None, str |
         # prefix with H1 display name if not already present
         if not body.lstrip().startswith("# "):
             body = f"# {display_name}\n\n{body}"
-        return new_path, None, body, None
+        return new_path, None, body, None, notices
 
     if kind == "patch_role_section":
         try:
             path = _resolve_role_path(book, slug)
         except (ValueError, FileNotFoundError) as e:
-            return None, None, None, str(e)
+            return None, None, None, str(e), notices
         before = path.read_text(encoding="utf-8")
-        new_text, err = _apply_section_op(before, op)
+        new_text, err, sec_notices = _apply_section_op(before, op)
+        notices.extend(sec_notices)
         if err:
-            return path, before, None, err
-        return path, before, new_text, None
+            return path, before, None, err, notices
+        return path, before, new_text, None, notices
 
     if kind == "rename_role":
         try:
             path = _resolve_role_path(book, slug)
         except (ValueError, FileNotFoundError) as e:
-            return None, None, None, str(e)
+            return None, None, None, str(e), notices
         new_slug = op.get("newSlug")
         err = _validate_slug(new_slug)
         if err:
-            return None, None, None, f"newSlug invalid: {err}"
+            return None, None, None, f"newSlug invalid: {err}", notices
         # new file lives in same tier dir (parent of current path)
         new_path = path.parent / f"{new_slug.strip()}.md"
         if new_path.exists():
-            return None, None, None, f"target slug already exists: {new_slug}"
+            return None, None, None, f"target slug already exists: {new_slug}", notices
         before = path.read_text(encoding="utf-8")
-        return new_path, before, before, None  # caller does the rename via os.rename
+        return new_path, before, before, None, notices  # caller renames via os.rename
 
     if kind == "delete_role":
         try:
             path = _resolve_role_path(book, slug)
         except (ValueError, FileNotFoundError) as e:
-            return None, None, None, str(e)
+            return None, None, None, str(e), notices
         before = path.read_text(encoding="utf-8")
         # Signal "delete" by returning after_text=None with no error.
         # Caller checks (kind == delete_role) and unlinks instead of writing.
-        return path, before, None, None
+        return path, before, None, None, notices
 
-    return None, None, None, "unreachable"
+    return None, None, None, "unreachable", notices
 
 
 # ──────────────────────────── public entrypoint ────────────────────────────
@@ -682,10 +801,12 @@ def apply(
                 if path.exists():
                     bak.parent.mkdir(parents=True, exist_ok=True)
                     bak.write_text(before, encoding="utf-8")
-                new_text, err = _apply_section_op(before, op)
+                new_text, err, sec_notices = _apply_section_op(before, op)
                 if err:
                     warnings.append(f"docOps.{target}[seq={seq}] failed: {err}")
                     continue
+                for n in sec_notices:
+                    warnings.append(f"docOps.{target}[seq={seq}] notice: {n}")
                 _atomic_write_text(path, new_text)
                 modified.append(str(path))
                 op_id = _op_id(rel, op.get("anchor"), applied_at)
@@ -699,6 +820,7 @@ def apply(
                     "sourcePhase": op.get("sourcePhase"),
                     "backupPath": str(bak.relative_to(book)) if path.exists() or bak.exists() else None,
                     "opId": op_id,
+                    "notices": sec_notices,
                 }
                 _append_doc_changes_log(book, entry)
                 applied.append(entry)
@@ -713,10 +835,12 @@ def apply(
                     bak.parent.mkdir(parents=True, exist_ok=True)
                     bak.write_text(before, encoding="utf-8")
                 key_cols = TABLE_KEY_COLUMNS[target]
-                new_text, err = _apply_table_op(before, op, key_cols, target)
+                new_text, err, tbl_notices = _apply_table_op(before, op, key_cols, target)
                 if err:
                     warnings.append(f"docOps.{target}[seq={seq}] failed: {err}")
                     continue
+                for n in tbl_notices:
+                    warnings.append(f"docOps.{target}[seq={seq}] notice: {n}")
                 _atomic_write_text(path, new_text)
                 modified.append(str(path))
                 key_repr = "|".join(str(k) for k in (op.get("key") or []))
@@ -731,16 +855,19 @@ def apply(
                     "sourcePhase": op.get("sourcePhase"),
                     "backupPath": str(bak.relative_to(book)) if path.exists() or bak.exists() else None,
                     "opId": op_id,
+                    "notices": tbl_notices,
                 }
                 _append_doc_changes_log(book, entry)
                 applied.append(entry)
                 continue
 
             if target == ROLE_TARGET:
-                tgt_path, before_text, after_text, err = _apply_role_op(book, op)
+                tgt_path, before_text, after_text, err, role_notices = _apply_role_op(book, op)
                 if err:
                     warnings.append(f"docOps.roles[seq={seq}] failed: {err}")
                     continue
+                for n in role_notices:
+                    warnings.append(f"docOps.roles[seq={seq}] notice: {n}")
                 rel = (
                     str(tgt_path.relative_to(book))
                     if tgt_path
@@ -781,6 +908,7 @@ def apply(
                     "sourcePhase": op.get("sourcePhase"),
                     "backupPath": str(bak.relative_to(book)) if before_text is not None else None,
                     "opId": op_id,
+                    "notices": role_notices,
                 }
                 _append_doc_changes_log(book, entry)
                 applied.append(entry)
