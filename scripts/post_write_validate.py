@@ -72,8 +72,10 @@ SENTINEL_LEAK_RE = re.compile(r"^=== [A-Z_]+ ===$", re.MULTILINE)
 CHAPTER_REF_RE = re.compile(r"(?:第\s*\d+\s*章|[Cc]hapter\s+\d+)")
 
 # Paragraph shape thresholds (Chinese).
-SHORT_THRESHOLD = 35
+SHORT_THRESHOLD = 40  # was 35; tightened by inkos commit 6e47112 (40 chars ≈ 2 mobile lines)
 LONG_PARAGRAPH = 300
+SHORT_CAP_PER_CHAPTER = 5  # inkos commit 6e47112 — at most 5 short-paragraph "punches" per chapter
+CONSECUTIVE_SHORT_LIMIT = 2  # inkos commit b1c7089 / ab39bd6 — 3+ consecutive shorts → critical
 WALL_OF_TEXT = 600          # critical: clearly too long for mobile reading
 MONOLITHIC_THRESHOLD = 1200  # critical: a single paragraph this big is a render bug
 
@@ -300,19 +302,39 @@ def check_paragraph_shape(body: str) -> list[dict]:
     monoliths = [(p, ln) for p, ln in paragraphs if len(p) >= MONOLITHIC_THRESHOLD]
 
     short_ratio = (len(short) / len(narrative)) if narrative else 0
-    if len(short) >= 4 and short_ratio >= 0.6:
+    # Inkos commit 6e47112: 60%+ narrative paragraphs under 40 chars → critical
+    # (was previously a softer warning at 35-char threshold).
+    if short_ratio >= 0.6 and len(short) >= 4:
         issues.append({
-            "severity": "warning",
+            "severity": "critical",
             "category": "paragraph-shape",
             "description": (
                 f"{len(paragraphs)} 段中 {len(short)} 段短于 {SHORT_THRESHOLD} 字，"
-                f"段落被切得过碎（短段比 {short_ratio:.0%}）"
+                f"段落被切得过碎（短段比 {short_ratio:.0%}，硬阈值 60%）"
             ),
             "line": short[0][1],
             "evidence": short[0][0][:40],
         })
 
-    # consecutive-short
+    # Inkos commit 6e47112: short-paragraph cap of 5 per chapter — three legit
+    # use cases (opening 300-char reversal / chapter-end hook / impact moments)
+    # combine to ≤ 5 total. Above that = telegraphic stacking.
+    if len(short) > SHORT_CAP_PER_CHAPTER:
+        issues.append({
+            "severity": "warning",
+            "category": "paragraph-shape",
+            "description": (
+                f"短段（< {SHORT_THRESHOLD} 字）共 {len(short)} 段，超过单章上限 "
+                f"{SHORT_CAP_PER_CHAPTER}——开篇反转 / 章末钩子 / ≤3 次冲击瞬间合计"
+                f"才允许 5 段，多了就是电报体堆砌"
+            ),
+            "line": short[0][1],
+            "evidence": short[0][0][:40],
+        })
+
+    # consecutive-short — inkos commit b1c7089/ab39bd6: 3+ in a row → critical
+    # (CONSECUTIVE_SHORT_LIMIT = 2 means "two in a row is the ceiling"; the 3rd
+    # paragraph must be ≥ 60 chars per the commit's hard rule).
     max_streak = 0
     streak = 0
     streak_start_line = 1
@@ -327,11 +349,15 @@ def check_paragraph_shape(body: str) -> list[dict]:
                 streak_start_for_max = streak_start_line
         else:
             streak = 0
-    if max_streak >= 3:
+    if max_streak > CONSECUTIVE_SHORT_LIMIT:
         issues.append({
-            "severity": "warning",
+            "severity": "critical",
             "category": "paragraph-shape",
-            "description": f"连续出现 {max_streak} 个短段（< {SHORT_THRESHOLD} 字），单句堆砌",
+            "description": (
+                f"连续出现 {max_streak} 个短段（< {SHORT_THRESHOLD} 字），违反"
+                f"“连续短段最多 {CONSECUTIVE_SHORT_LIMIT}”硬规则——第 3 段必须"
+                f"60 字以上带动作 / 情绪 / 描写"
+            ),
             "line": streak_start_for_max,
             "evidence": "",
         })

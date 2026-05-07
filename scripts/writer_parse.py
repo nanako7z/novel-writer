@@ -19,6 +19,7 @@ Sentinels recognized (verbatim from Writer's §14 OUTPUT FORMAT contract):
     === UPDATED_EMOTIONAL_ARCS ===
     === UPDATED_CHARACTER_MATRIX ===
     === POST_WRITE_ERRORS ===       (optional — Writer self-reported violations)
+    === HOOK_PAYOFF_AUDIT ===       (optional — Writer hook_id → prose anchor self-check, inkos commit ab39bd6)
 
 Short aliases (TITLE / BODY / SUMMARY / POSTWRITE_ERRORS) are also accepted
 for hand-crafted test fixtures.
@@ -69,6 +70,7 @@ KNOWN_SENTINELS = (
     "UPDATED_EMOTIONAL_ARCS",
     "UPDATED_CHARACTER_MATRIX",
     "POST_WRITE_ERRORS",
+    "HOOK_PAYOFF_AUDIT",  # optional self-check block (inkos commit ab39bd6 port)
 )
 REQUIRED_STRICT = ("CHAPTER_TITLE", "CHAPTER_CONTENT")
 

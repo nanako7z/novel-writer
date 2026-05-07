@@ -70,6 +70,7 @@ from hook_arbitrate import arbitrate as arbitrate_hooks  # noqa: E402
 from _summary import emit_summary  # noqa: E402
 
 HOOK_GOVERNANCE_SCRIPT = Path(__file__).resolve().parent / "hook_governance.py"
+COMMITMENT_LEDGER_SCRIPT = Path(__file__).resolve().parent / "commitment_ledger.py"
 BOOK_LOCK_SCRIPT = Path(__file__).resolve().parent / "book_lock.py"
 
 
@@ -335,6 +336,13 @@ def parse_args() -> argparse.Namespace:
         help="skip the post-write hook_governance validate+stale-scan pass",
     )
     p.add_argument(
+        "--skip-commitment-ledger",
+        action="store_true",
+        help="skip the post-write commitment_ledger pass (reveal-bury floor + "
+        "hook payoff window check, ports inkos commits b1cc3a7 + ab39bd6). "
+        "Use only when the memo or chapter draft is unavailable on disk.",
+    )
+    p.add_argument(
         "--skip-arbitration",
         action="store_true",
         help="skip the pre-write hook arbiter (newHookCandidates / unknown-id "
@@ -440,6 +448,51 @@ def release_book_lock(book: Path) -> dict:
         return {"ok": True, "result": "released"}
     except OSError as e:
         return {"ok": False, "result": "io-error", "error": str(e)}
+
+
+def run_commitment_ledger(book: Path, chapter: int | None) -> dict:
+    """Run scripts/commitment_ledger.py against the just-written chapter.
+
+    Resolves memo path = book/story/runtime/chapter_memo.md and draft path via
+    `_chapter_files.find_chapter_file`. Returns the ledger validate JSON or
+    `{"ok": False, "error": ...}` if either input is missing.
+
+    Critical violations under categories REVEAL_BURY_FLOOR or
+    HOOK_PAYOFF_UNLOCATED (commits b1cc3a7 + ab39bd6) trigger the same
+    governance_blocked behavior as hook_governance critical issues — truth
+    files persist but the caller must not promote the draft.
+    """
+    if not COMMITMENT_LEDGER_SCRIPT.exists():
+        return {"ok": False, "error": "commitment_ledger.py missing"}
+    memo = book / "story" / "runtime" / "chapter_memo.md"
+    if not memo.exists():
+        return {"ok": False, "error": "chapter_memo.md missing — skipped"}
+    draft = None
+    if isinstance(chapter, int):
+        try:
+            from _chapter_files import find_chapter_file
+            draft = find_chapter_file(book, chapter)
+        except Exception:  # noqa: BLE001
+            draft = None
+    if draft is None or not draft.exists():
+        return {"ok": False, "error": f"chapter draft for ch={chapter} missing — skipped"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(COMMITMENT_LEDGER_SCRIPT),
+             "--memo", str(memo), "--draft", str(draft), "--json"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return {"ok": False, "error": f"commitment_ledger subprocess failed: {e}"}
+    # Exit codes: 0 = clean, 2 = critical violations, 3 = bad input.
+    if proc.returncode not in (0, 2):
+        return {"ok": False,
+                "error": f"commitment_ledger exit={proc.returncode}",
+                "stderr": (proc.stderr or "").strip()[:400]}
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"commitment_ledger bad JSON: {e}"}
 
 
 def run_hook_governance(book: Path, command: str, current_chapter=None) -> dict:
@@ -764,6 +817,38 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         elif isinstance(validate_out, dict) and not validate_out.get("ok"):
             warnings.append(f"hook_governance validate failed: {validate_out.get('error')}")
 
+    # ── commitment_ledger gate (reveal-bury floor + payoff window) ──────
+    # Ports inkos commits b1cc3a7 (hook-ledger-validator hard floor) +
+    # ab39bd6 (hook payoff must be concretely locatable in prose). Runs only
+    # when the memo + chapter draft are on disk; missing inputs degrade to a
+    # warning, not a block, so legacy runners keep working.
+    commitment_report: dict = {}
+    if not args.skip_commitment_ledger and not governance_blocked:
+        commitment_report = run_commitment_ledger(book, chapter_for_scan)
+        if isinstance(commitment_report, dict):
+            # Two distinct "ok=False" modes need disambiguation:
+            #   (1) wrapper-level: subprocess error / missing memo or draft
+            #       → has "error" key, no "violations" key
+            #   (2) ledger-level: commitment_ledger ran but found critical
+            #       violations → has "violations" array, no "error" key
+            if "error" in commitment_report and "violations" not in commitment_report:
+                warnings.append(
+                    f"commitment_ledger skipped: {commitment_report.get('error')}"
+                )
+            else:
+                crit_violations = [
+                    v for v in (commitment_report.get("violations") or [])
+                    if v.get("severity") == "critical"
+                ]
+                if crit_violations:
+                    governance_blocked = True
+                    cats = sorted({v.get("category", "") for v in crit_violations})
+                    warnings.append(
+                        f"commitment_ledger flagged {len(crit_violations)} "
+                        f"critical issue(s) [{', '.join(c for c in cats if c)}]; "
+                        "delta written but caller should NOT promote draft."
+                    )
+
     # ── book.json metadata maintenance (mirrors inkos markBookActiveIfNeeded) ──
     chapter_no = delta.get("chapter") if isinstance(delta, dict) else None
     chapter_no = chapter_no if isinstance(chapter_no, int) else None
@@ -805,6 +890,7 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
         "warnings": warnings,
         "arbitration": arbitration_report,
         "hookGovernance": governance_report,
+        "commitmentLedger": commitment_report,
         "hookGovernanceBlocked": governance_blocked,
         "bookMetadata": book_metadata,
         "manifestAdvance": manifest_advance,
