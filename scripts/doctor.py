@@ -31,6 +31,7 @@ SKILL_ROOT = Path(__file__).resolve().parent.parent
 # Single source of truth for the on-disk schema version.
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 from _schema import SCHEMA_VERSION, STATE_FILES_WITH_VERSION  # noqa: E402
+from _constants import CHAPTER_STATUS  # noqa: E402
 
 # ---- expectation tables (kept in sync with templates/ + scripts/) ---------
 
@@ -101,6 +102,9 @@ EXPECTED_SCRIPTS = [
 ]
 
 CHAPTER_NAME_OK = re.compile(r"^\d{4}(_[^/]*)?\.md$")
+# Runtime-form file accidentally placed in chapters/. Final landed chapter
+# bodies are NEVER named like this; this prefix only belongs in story/runtime/.
+RUNTIME_FORM_IN_CHAPTERS = re.compile(r"^chapter-\d{4}(\.[^/]+)?\.md$")
 
 
 # ---------- check primitive ------------------------------------------------
@@ -246,12 +250,75 @@ def check_book(book_dir: Path) -> list[dict]:
                       if f.is_file() and f.suffix == ".md"]
 
     bad_named = [f.name for f in chap_files if not CHAPTER_NAME_OK.match(f.name)]
+    runtime_misplaced = [f.name for f in chap_files
+                         if RUNTIME_FORM_IN_CHAPTERS.match(f.name)]
     if bad_named:
         out.append(make("chapter naming", "fail",
                         f"non-NNNN[_<title>].md: {', '.join(bad_named[:5])}"))
     else:
         out.append(make("chapter naming", "ok",
                         f"{len(chap_files)} files match NNNN[_<title>].md"))
+    if runtime_misplaced:
+        out.append(make("chapters/ no runtime sidecars", "fail",
+                        "runtime-form file(s) in chapters/: "
+                        f"{', '.join(runtime_misplaced[:5])} — "
+                        "rename to NNNN[_<title>].md (chapter-NNNN.* belongs in story/runtime/)"))
+    else:
+        out.append(make("chapters/ no runtime sidecars", "ok",
+                        "no chapter-NNNN.* files in chapters/"))
+
+    # chapters/index.json schema sanity (operational index per
+    # references/schemas/chapter-index.md). chapter_index.py validate is the
+    # authoritative checker; doctor surfaces the most common drifts (legacy
+    # field names from hand-written entries, off-enum status) so they get
+    # caught even when the user never runs validate.
+    index_p = chap_dir / "index.json"
+    if not index_p.is_file():
+        out.append(make("chapters/index.json", "warning",
+                        "missing (will be created on first chapter_index.py add)"))
+    else:
+        try:
+            idx_obj = json.loads(index_p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            out.append(make("chapters/index.json", "fail", f"invalid JSON: {e}"))
+            idx_obj = None
+        if idx_obj is not None:
+            if not isinstance(idx_obj, list):
+                out.append(make("chapters/index.json", "fail",
+                                "top-level must be a JSON array of ChapterMeta"))
+            else:
+                legacy_field_hits: list[str] = []
+                bad_status_hits: list[str] = []
+                missing_required: list[str] = []
+                for i, e in enumerate(idx_obj):
+                    if not isinstance(e, dict):
+                        missing_required.append(f"#{i}: not an object")
+                        continue
+                    if "chapter" in e and "number" not in e:
+                        legacy_field_hits.append(f"#{i}: 'chapter' (use 'number')")
+                    if "file" in e:
+                        legacy_field_hits.append(f"#{i}: 'file' (not in schema)")
+                    s = e.get("status")
+                    if s is not None and s not in CHAPTER_STATUS:
+                        bad_status_hits.append(f"#{i}: status={s!r}")
+                    for req in ("number", "title", "status", "createdAt", "updatedAt"):
+                        if req not in e:
+                            missing_required.append(f"#{i}: missing {req}")
+                            break
+                problems: list[str] = []
+                if legacy_field_hits:
+                    problems.append("legacy fields → " + "; ".join(legacy_field_hits[:3]))
+                if bad_status_hits:
+                    problems.append("off-enum status → " + "; ".join(bad_status_hits[:3]))
+                if missing_required:
+                    problems.append("missing required → " + "; ".join(missing_required[:3]))
+                if problems:
+                    out.append(make("chapters/index.json", "fail",
+                                    " | ".join(problems)
+                                    + " — run chapter_index.py validate for full report"))
+                else:
+                    out.append(make("chapters/index.json", "ok",
+                                    f"{len(idx_obj)} entries match ChapterMeta"))
 
     if last_applied > len(chap_files):
         out.append(make("manifest vs chapters", "fail",

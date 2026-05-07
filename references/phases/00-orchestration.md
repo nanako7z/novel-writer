@@ -290,6 +290,11 @@ function writeNextChapter(book):
     # audit 未过则根本不到这一步——Reviser 已经在 step 7 处理过了
 
     # ── 11. 最终落盘章节正文 + 章节运营索引 ──────────────────
+    # 命名硬约束：最终章节文件**只能**是 `chapters/{NNNN}.md` 或
+    # `chapters/{NNNN}_<title>.md`（与 InkOS `_chapter_files.py` 共用同一识别器）。
+    # **禁止**把 runtime 阶段的 `chapter-{NNNN}.<phase>.md` 命名搬进 chapters/——
+    # 那只属于 story/runtime/。`doctor.py --book` 的 "chapters/ no runtime sidecars"
+    # 检查会把这种误放当 critical 报。
     write chapters/{NNNN}.md = draft
     update story/state/manifest.json#lastAppliedChapter = chapterNo
 
