@@ -104,30 +104,11 @@ Settler raw chat output
 
 ### 推荐流水线
 
-```
-Settler raw output
-   │
-   ▼ scripts/settler_parse.py --mode raw --input settlement.txt --out delta.json
-   │   （只跑 Stage 1+2+3，不写真理文件；调试 / 离线检查用）
-   ▼
-delta.json (cleaned)
-   │
-   ▼ scripts/apply_delta.py --book <book> --delta delta.json
-   │   （--input-mode 默认 json，对清洗后的 JSON 再跑一次 Stage 2+3 + 落盘）
-   ▼
-truth files updated
-```
+单步走完（推荐）：`scripts/apply_delta.py --book <book> --delta settlement.txt --input-mode raw`——把 Settler 原始输出直接喂入，跑 Stage 1+2+3 + 落盘。
 
-或单步走完：`scripts/apply_delta.py --book <book> --delta settlement.txt --input-mode raw` ——直接把 Settler 原始输出喂给 apply_delta，省掉中间文件。
+`--input-mode`：默认 `json`（已清洗 JSON，跳过 Stage 1，向后兼容）；`raw`（含哨兵的原始输出，跑完整三段）。
 
-`--input-mode` 取值：
-
-| 值 | 含义 |
-|----|------|
-| `json`（默认） | 输入为干净的 RuntimeStateDelta JSON。跳过 Stage 1，仍跑 Stage 2 + 3。**完全向后兼容**——所有旧调用方无需改动。 |
-| `raw` | 输入为 Settler 原始聊天输出（带 `=== POST_SETTLEMENT ===` / `=== RUNTIME_STATE_DELTA ===` 哨兵和前后散文）。运行完整 Stage 1 + 2 + 3。 |
-
-`scripts/settler_parse.py` 单独 CLI（同样支持 `--mode raw|json`，加 `--out` 写清洗后的 JSON、加 `--strict` 让任何 softFix 也算失败）适合调试 Settler 输出而**不**触碰真理文件。
+调试不写盘用 `scripts/settler_parse.py --mode raw --input ... --out delta.json`（含 `--strict` 把 softFix 也当失败）。
 
 ---
 
@@ -200,6 +181,7 @@ truth files updated
 | `subplotOps` | array<object> | 是（默认 []） | 支线进度变动；schema 宽松（`z.record(z.unknown())`） |
 | `emotionalArcOps` | array<object> | 是（默认 []） | 情感弧线变动；每项**必填**：`character` (string), `chapter` (int≥1), `emotionalState` (string), `triggerEvent` (string), `intensity` (int 1-10), `arcDirection` (`rising`\|`falling`\|`stable`\|`turning`)。缺/空任一列会被拒。 |
 | `characterMatrixOps` | array<object> | 是（默认 []） | 角色交互矩阵变动；schema 宽松 |
+| `cliffhangerEntry` | object | 否 | 本章章末勾子记录；省略 = Settler 未声明。给出则**必填** `type` + `intensity` + `brief`。详见 §7c |
 | `notes` | array<string> | 是（默认 []） | 自由文本备注 |
 
 ---
@@ -393,20 +375,42 @@ upsert 允许出现 header 中尚未存在的列名——doc_ops 会自动扩 he
 }
 ```
 
-### `docOpsApplied` 输出与 `doc_changes.log`
+### `docOpsApplied` + 回滚
 
-apply_delta 输出 JSON 增 `docOpsApplied: [{file, op, anchor, reason, sourcePhase, backupPath, opId}]`。同时在 `story/runtime/doc_changes.log` 追加 NDJSON：
-```jsonc
-{"appliedAt":"2026-05-07T...","chapter":12,"file":"story/current_focus.md","op":"replace_section","anchor":"## Active Focus","reason":"ch12 兑现 X 后下一段","sourcePhase":"settler","backupPath":"story/runtime/doc_ops.bak/0012/story__current_focus.md.1.bak","opId":"a1b2c3d4"}
+apply_delta 输出 `docOpsApplied: [{file, op, anchor, reason, sourcePhase, backupPath, opId}]`，同步 NDJSON 追到 `story/runtime/doc_changes.log`。回滚：`scripts/apply_delta.py --book <bk> revert-doc-op --op-id <sha8>`（按 backupPath 原子还原）。
+
+---
+
+## 7c. `cliffhangerEntry` 子 schema（章末勾子记录）
+
+每章 Settler **应**输出一个 `cliffhangerEntry`，描述本章是用什么形式收尾的。落盘到 `story/state/cliffhanger_history.json`，Planner 读取最近 6 条得到"勾子种类分布"——避免连续 N 章用同一招（"反转身份"是 LLM 最爱用的，必须显式抑制）。
+
+```json
+"cliffhangerEntry": {
+  "type": "revelation",
+  "intensity": 4,
+  "brief": "白衣翁右臂玉牌竟然是反派那枚的另一半"
+}
 ```
 
-### 回滚
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `type` | enum | 是 | 12 类之一：`ambush`(突遇袭击/伏击)、`revelation`(真相揭露)、`betrayal`(背叛)、`ultimatum`(被迫选择/最后通牒)、`encounter`(强敌登场/重要人物现身)、`transformation`(突破/质变)、`loss`(失去重要人或物)、`discovery`(重大发现)、`decision`(主角主动决断)、`secret-exposed`(身份/秘密被识破)、`stakes-raised`(风险骤升)、`none`(无勾子，日常收尾) |
+| `intensity` | int 1-5 | 是 | 章末张力强度。1=日常温和、2=轻微、3=中等、4=强、5=本卷高潮级 |
+| `brief` | string | 是 | ≤ 50 字一句话描述。落盘原文，Planner 读时能"看懂"是哪一招，不光是 type 标签 |
 
-```bash
-python scripts/apply_delta.py --book <bk> revert-doc-op --op-id <sha8>
+**Settler 必须 emit 该字段**（除非整章是纯铺垫无收尾——此时 emit `type: "none"` + `intensity: 1` + brief="纯铺垫章无收尾勾子"），否则 chapter_summaries.json 与 cliffhanger_history.json 失同步。`apply_delta.py` 在该字段缺失时打 warning 但不阻断。
+
+落盘文件 `story/state/cliffhanger_history.json` 形状：
+
+```json
+{
+  "rows": [
+    {"chapter": 12, "type": "revelation", "intensity": 4, "brief": "...", "recordedAt": "2026-05-08T..."},
+    {"chapter": 13, "type": "ambush", "intensity": 3, "brief": "..."}
+  ]
+}
 ```
-
-从 `doc_changes.log` 反查 `backupPath`，原子还原。
 
 ---
 
@@ -425,6 +429,7 @@ python scripts/apply_delta.py --book <bk> revert-doc-op --op-id <sha8>
 | `subplotOps` | `story/subplot_board.md` | 自由结构 op，由 reducer 解释 |
 | `emotionalArcOps` | `story/emotional_arcs.md` | 同上 |
 | `characterMatrixOps` | `story/character_matrix.md` | 同上 |
+| `cliffhangerEntry` | `story/state/cliffhanger_history.json` | append 一行；缺失只 warning |
 | `notes` | `story/state/manifest.json#migrationWarnings`（可选） | 也可作为本章日志 |
 | `docOps` | 作者域指导 md（白名单 8 个） | `doc_ops.apply()`，每条写前 `.bak`，应用后追加 `doc_changes.log` |
 | `newRoleCandidates` | role-arbiter（P0 暂未实现，候选保留在 delta 内） | 决定 created / mapped / rejected |
@@ -462,14 +467,7 @@ python scripts/apply_delta.py --book <bk> revert-doc-op --op-id <sha8>
 1. **`hookOps.upsert` 引用的 `hookId` 必须先在 `hooks.json` 中存在**。如果 settler 想推进的伏笔目前还只是 seed（即 `hooks.json` 里查不到），settler 应改写到 `newHookCandidates`，由后续的 `hook_governance --command promote-pass` 决定是否提升进 ledger。直接 upsert 一个仅存在于 `hook-seeds.json` 的 id 会被 apply_delta 警告（`stale_ledger_row`），并在下一次 validate 中复发。
 2. **不要在 settler 里手设 `promoted=true`**。`promoted` 是治理层的输出而非 settler 输入；settler 透传旧值即可，新值由 promote-pass 写。
 
-### 为什么这样设计
-
-如果允许任何 seed 都直接落进 `pending_hooks.md`：
-- 几章后 ledger 会被一次性观察候选淹没（observer 每章可能输出 5+ 候选）；
-- 没有 dependsOn / coreHook / advanced ≥ 2 / cross-volume 任一信号的伏笔会停留为永久"信息噪声"，让 reviewer 误读；
-- `chapter_summaries.json#hookActivity` 中的 token 集合会膨胀到无法对账。
-
-promotion 闸口确保 ledger 里**每一条都至少有一个被读者持续追踪的理由**。详见 [`references/hook-governance.md`](../hook-governance.md)。
+**为什么**：未经 promotion 的 seed 直进 ledger 会让 pending_hooks.md 被 observer 候选淹没（每章 5+），且无 dependsOn / coreHook / cross-volume 信号的伏笔会成永久噪声。详见 [`references/hook-governance.md`](../hook-governance.md)。
 
 ---
 

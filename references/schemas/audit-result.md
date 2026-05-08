@@ -82,27 +82,15 @@ passed == true   ⟺   issues 中不存在 severity == "critical" 的项
 
 ---
 
-## 6. overall_score 评分校准（中英双版逐字）
+## 6. overall_score 评分校准
 
-中文版（`continuity.ts` L524-530）：
-
-| 区间 | 含义 |
-|------|------|
-| 95-100 | 可直接发布，无明显问题 |
-| 85-94  | 有小瑕疵但整体流畅可读，读者不会出戏 |
-| 75-84  | 有明显问题但故事主干完整，需要修但不紧急 |
-| 65-74  | 多处影响阅读体验的问题，节奏或连续性有断裂 |
-| < 65   | 结构性问题，需要大幅重写 |
-
-英文版评分校准（`continuity.ts` L487-492）：
-
-| 区间 | 含义 |
-|------|------|
-| 95-100 | Publishable as-is, no noticeable issues |
-| 85-94  | Minor blemishes but smooth reading, the reader won't break immersion |
-| 75-84  | Noticeable problems but the story backbone holds, needs revision but not urgent |
-| 65-74  | Multiple issues hurt the reading experience, pacing or continuity has gaps |
-| < 65   | Structural breakdown, needs major rewrite |
+| 区间 | 中文 | English |
+|---|---|---|
+| 95-100 | 可直接发布，无明显问题 | Publishable as-is |
+| 85-94 | 有小瑕疵但整体流畅可读，读者不会出戏 | Minor blemishes but smooth reading |
+| 75-84 | 有明显问题但故事主干完整，需要修但不紧急 | Noticeable problems but backbone holds |
+| 65-74 | 多处影响阅读体验，节奏或连续性有断裂 | Multiple issues hurt experience |
+| < 65 | 结构性问题，需要大幅重写 | Structural breakdown, needs major rewrite |
 
 > 综合评分，不要因为单一小问题大幅拉低分数。
 
@@ -110,34 +98,12 @@ passed == true   ⟺   issues 中不存在 severity == "critical" 的项
 
 ## 7. audit-revise 主循环阈值
 
-来源：`pipeline/chapter-review-cycle.ts` L33-35。
-
 | 常量 | 值 | 用途 |
-|------|----|------|
-| `MAX_REVIEW_ITERATIONS` | `3` | audit-revise 最多回环 3 轮 |
-| `NET_IMPROVEMENT_EPSILON` | `3` | 提前退出阈值：如果新一轮 `overall_score - 上一轮 overall_score < 3`，提前退出并保留历轮中 score 最高的版本 |
+|---|---|---|
+| `MAX_REVIEW_ITERATIONS` | 3 | 最多回环 3 轮 |
+| `NET_IMPROVEMENT_EPSILON` | 3 | 新轮 score - 上轮 < 3 提前退出，保留历轮最高分版本 |
 
-伪代码：
-
-```python
-best = None
-prev_score = -inf
-for i in range(MAX_REVIEW_ITERATIONS):
-    audit = run_auditor(chapter_text)
-    if best is None or audit.overall_score > best.score:
-        best = (audit, chapter_text)
-    if audit.passed and audit.overall_score >= 85:
-        return best
-    delta = audit.overall_score - prev_score
-    if i > 0 and delta < NET_IMPROVEMENT_EPSILON:
-        # 改了一轮但没明显改善——保留最高分版本
-        return best
-    chapter_text = run_reviser(chapter_text, audit.issues)
-    prev_score = audit.overall_score
-return best
-```
-
-> 实际 inkos 实现可能更细致（按 critical 数 + 分数综合判断），SKILL 移植时以 `passed && score >= 85` 与 `delta < 3` 两个早退条件为主。
+退出条件：`passed && score >= 85` OR `i > 0 且 delta < 3`。每轮先 audit → 记 best → 判退出 → 若不退出则 reviser → 下轮。
 
 ---
 

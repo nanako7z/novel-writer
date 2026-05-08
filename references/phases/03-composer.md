@@ -90,6 +90,7 @@ retrievalHints = [memo.goal, memo.outlineNode, ...memo.threadRefs].filter(truthy
 | 14   | `memory_retrieve#relevant_summaries` | Relevant episodic memory（events-only）.                                       | `relevantSummaries`（脚本已按 character/hook 重叠筛选并截到 events）             |
 | 15   | `story/volume_summaries.md#<anchor>` | Long-span arc memory compressed from earlier volumes.                          | 卷级摘要（如果有）                                                          |
 | 16   | `story/pending_hooks.md#<hookId>`   | Carry forward unresolved hooks that match the chapter focus.                    | type \| status \| expectedPayoff \| payoffTiming \| notes 拼接          |
+| 17   | `story/roles/<slug>.md#voiceProfile` | Per-character voice identity hard rules (用于本章对白)。                          | 对本章场景中**会开口或有内心戏**的每个角色，从其 `## 语言/动作识别记号 (voiceProfile)` 段原样抠出 7 项识别记号。`memo.characters` + `memo.threadRefs` 牵出的角色都纳入；不在场角色不抠（避免 prompt 膨胀）。空白角色（`_未定_` 占位）跳过。详见 [role-template.md](../role-template.md) |
 
 **hook debt 简报格式**（中文版）：
 
@@ -310,31 +311,19 @@ Composer 是确定性流程，**不应失败**。可能的异常：
 
 ## 辅助：轻量过滤 vs. 派生视图
 
-Composer 在装 selectedContext 前可选两条降噪路径，按需要二选一或都用：
+两条降噪路径，按需二选一或都用：
 
 | 工具 | 何时用 | 输出形态 |
 |---|---|---|
-| `scripts/context_filter.py` | **drop noise**——只想去掉 `pending_hooks` 已回收行 / `chapter_summaries` 远窗口外的章 / `subplot_board` 已结支线 / `emotional_arcs` 太老的孤立行 | 原文件相同形状的 markdown，只是行少了。`(文件尚未创建)` 占位 / 全部行都被过滤的 fallback 都直接还原原文。 |
-| `scripts/state_project.py` | **derived views**——需要"按角色聚合的 hook 债务"、"主线进展时间线"、"卷视图"等**重新结构化**的派生视图 | 全新 schema 的 JSON / md（不是输入文件的子集），用于 selectedContext 单条 excerpt。 |
-
-简单原则：
-
-- 只是想砍掉无关行 → `context_filter.py`（更便宜，不改结构）。
-- 想要 cross-cut 的"切片视图" → `state_project.py`。
-
-`context_filter.py` 的调用形式（详见脚本 `--help`）：
+| `context_filter.py` | drop noise（已回收行 / 远窗口章 / 已结支线 / 太老孤立行） | 原结构 markdown，行变少；空表 fallback 回原文 |
+| `state_project.py` | 需要 cross-cut 派生视图（角色聚合 hook 债 / 主线时间线 / 卷视图） | 全新 schema JSON / md，作单条 excerpt 用 |
 
 ```bash
-python {SKILL_ROOT}/scripts/context_filter.py \
-  --book <bookDir> --current-chapter N \
-  --filter hooks|summaries|subplots|emotional-arcs|all \
-  [--keep-recent 6] [--json]
+python scripts/context_filter.py --book <bookDir> --current-chapter N \
+  --filter hooks|summaries|subplots|emotional-arcs|all [--keep-recent 6] [--json]
 ```
 
-- 默认 `--keep-recent` 与 `chapter-cadence` 默认窗口一致（6）。
-- `--filter all` 一次跑四个，输出 `{ok, results: [{filter, source, originalLines, keptLines, content}]}`。
-- 单 filter 不带 `--json` 时直接把过滤后的纯文本写到 stdout，方便管道。
-- **fallback 守恒**：任何 filter 把数据行清空时回退原文，避免 Writer 看到空表错觉。
+`--keep-recent` 默认 6（与 cadence 默认窗一致）；`--filter all` 一次跑四个；单 filter 无 `--json` 直接 stdout 纯文本。**fallback 守恒**：filter 清空时回原文，避免 Writer 见空表脑补。
 
 ## 注意事项
 

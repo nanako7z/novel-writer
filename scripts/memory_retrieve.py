@@ -18,7 +18,8 @@ CLI:
   python memory_retrieve.py --book <bookDir> --current-chapter N \
     [--memo <chapter_memo.md>] \
     [--window-recent 6] [--window-relevant 8] \
-    [--include-resolved-hooks] [--format json|markdown]
+    [--include-resolved-hooks] [--scan-volume-summaries] \
+    [--format json|markdown]
 
 `--memo` reads YAML frontmatter flags from a chapter_memo file and adjusts
 window defaults accordingly (gap item #3). Precedence: explicit CLI flags
@@ -26,8 +27,15 @@ window defaults accordingly (gap item #3). Precedence: explicit CLI flags
 
   isGoldenOpening : true → window-recent=2, window-relevant=0
   cliffResolution : true → --include-resolved-hooks (auto)
-  arcTransition   : true → window-relevant=12
+  arcTransition   : true → window-relevant=12, --scan-volume-summaries (auto)
   volumeFinale    : true → window-relevant=0 (only this volume's recent)
+
+`--scan-volume-summaries` adds a 7th selection pass over `story/volume_summaries.md`
+(written by the Consolidator). It returns volume-level paragraphs whose text
+substring-matches any anchor term (characters in recent window + active hookIds).
+Useful past 30+ chapters where active hooks may want to reference an event
+already pushed into archived volume summaries — pure-lastN substring retrieval
+otherwise misses cross-volume callbacks.
 """
 from __future__ import annotations
 
@@ -209,6 +217,82 @@ def select_recently_resolved_hooks(hooks: list[dict], current_chapter: int) -> l
     return [h for h in hooks if hook_resolved_recently(h, current_chapter)]
 
 
+# ─────────────────── Volume summaries (markdown sections) ─────
+
+
+_VOLUME_HEADING_RE = re.compile(
+    r"^##\s+(?P<name>.+?)\s*\(Ch\.?\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_volume_summaries(md: str) -> list[dict]:
+    """Parse `story/volume_summaries.md` into a list of volume entries.
+
+    Format produced by Consolidator (see references/phases/12-consolidator.md §3d):
+        ## <name> (Ch.X-Y)
+
+        <paragraph...>
+
+    Returns: [{name, startCh, endCh, paragraph}]. Tolerant of extra blank
+    lines and minor heading drift. Lines outside any heading are dropped.
+    """
+    entries: list[dict] = []
+    cur: dict | None = None
+    buf: list[str] = []
+
+    def _flush() -> None:
+        if cur is None:
+            return
+        cur["paragraph"] = "\n".join(buf).strip()
+        entries.append(cur)
+
+    for line in md.splitlines():
+        m = _VOLUME_HEADING_RE.match(line.strip())
+        if m:
+            _flush()
+            cur = {
+                "name": m.group("name").strip(),
+                "startCh": int(m.group("start")),
+                "endCh": int(m.group("end")),
+            }
+            buf = []
+        else:
+            if cur is not None:
+                buf.append(line)
+    _flush()
+    return entries
+
+
+def select_relevant_volume_summaries(
+    volumes: list[dict],
+    current_chapter: int,
+    anchor_terms: set[str],
+) -> list[dict]:
+    """Volume summaries whose paragraph or name substring-matches any anchor term.
+
+    Only volumes that have already closed strictly before the current chapter
+    are considered (endCh < current_chapter). No ranking — returns all matches
+    in chronological order. Caller decides how to truncate.
+    """
+    if not anchor_terms:
+        return []
+    out: list[dict] = []
+    for v in volumes:
+        if int(v.get("endCh", 0) or 0) >= current_chapter:
+            continue
+        blob = (str(v.get("name", "")) + " " + str(v.get("paragraph", ""))).lower()
+        if any(t in blob for t in anchor_terms if t):
+            out.append({
+                "name": v.get("name", ""),
+                "startCh": v.get("startCh"),
+                "endCh": v.get("endCh"),
+                "paragraph": v.get("paragraph", ""),
+            })
+    out.sort(key=lambda v: int(v.get("startCh", 0) or 0))
+    return out
+
+
 # ─────────────────── Character roster (markdown table) ────────
 
 
@@ -267,6 +351,7 @@ def render_markdown(payload: dict) -> str:
         f"_recent={stats.get('recentCount', 0)} "
         f"relevant={stats.get('relevantCount', 0)} "
         f"activeHooks={stats.get('activeHookCount', 0)} "
+        f"vols={stats.get('relevantVolumeCount', 0)} "
         f"chars≈{stats.get('totalChars', 0)}_"
     )
     lines.append("")
@@ -308,6 +393,16 @@ def render_markdown(payload: dict) -> str:
                 f"- `{h.get('hookId','?')}` resolved ch{h.get('lastAdvancedChapter','?')}: "
                 f"{h.get('expectedPayoff','')}"
             )
+        lines.append("")
+
+    if payload.get("relevantVolumeSummaries"):
+        lines.append("## Cross-volume callbacks (matched anchors in volume_summaries.md)")
+        for v in payload["relevantVolumeSummaries"]:
+            name = v.get("name", "")
+            sc = v.get("startCh")
+            ec = v.get("endCh")
+            para = (v.get("paragraph") or "").strip()
+            lines.append(f"- **{name}** (Ch.{sc}-{ec}): {para}")
         lines.append("")
 
     if payload["characterRoster"]:
@@ -366,6 +461,11 @@ def parse_args() -> argparse.Namespace:
         "--include-resolved-hooks", action="store_true", default=None,
         help="also include hooks resolved in the last 3 chapters (auto-set if memo cliffResolution=true)",
     )
+    p.add_argument(
+        "--scan-volume-summaries", action="store_true", default=None,
+        help=("scan story/volume_summaries.md for cross-volume callbacks "
+              "(auto-set if memo arcTransition=true)"),
+    )
     p.add_argument("--format", choices=["json", "markdown"], default="json")
     return p.parse_args()
 
@@ -374,9 +474,11 @@ def resolve_windows(
     cli_recent: int | None,
     cli_relevant: int | None,
     cli_resolved: bool | None,
+    cli_scan_volumes: bool | None,
     memo_flags: dict[str, bool],
-) -> tuple[int, int, bool, list[str]]:
-    """Compute final (window_recent, window_relevant, include_resolved, applied).
+) -> tuple[int, int, bool, bool, list[str]]:
+    """Compute final (window_recent, window_relevant, include_resolved,
+    scan_volume_summaries, applied).
 
     Precedence: CLI > memo > default.
     `applied` is a list of human-readable trace strings (for stats) noting
@@ -385,11 +487,13 @@ def resolve_windows(
     default_recent = 6
     default_relevant = 8
     default_resolved = False
+    default_scan_volumes = False
 
     # Start with defaults
     recent = default_recent
     relevant = default_relevant
     resolved = default_resolved
+    scan_volumes = default_scan_volumes
     applied: list[str] = []
 
     # Apply memo flags (lower precedence than CLI).
@@ -404,10 +508,11 @@ def resolve_windows(
         recent = 2
         relevant = 0
         applied.append("isGoldenOpening → recent=2 relevant=0")
-    # arcTransition: widen relevant
+    # arcTransition: widen relevant + scan archived volume summaries
     if memo_flags.get("arcTransition") and not memo_flags.get("isGoldenOpening"):
         relevant = max(relevant, 12)
-        applied.append("arcTransition → relevant=12")
+        scan_volumes = True
+        applied.append("arcTransition → relevant=12 +scan-volume-summaries")
     # volumeFinale: zero out relevant (focus only on this volume)
     if memo_flags.get("volumeFinale"):
         relevant = 0
@@ -420,8 +525,10 @@ def resolve_windows(
         relevant = cli_relevant
     if cli_resolved is not None:
         resolved = bool(cli_resolved)
+    if cli_scan_volumes is not None:
+        scan_volumes = bool(cli_scan_volumes)
 
-    return recent, relevant, resolved, applied
+    return recent, relevant, resolved, scan_volumes, applied
 
 
 def main() -> int:
@@ -449,8 +556,10 @@ def main() -> int:
         "isGoldenOpening": False, "cliffResolution": False,
         "arcTransition": False, "volumeFinale": False, "isReshootChapter": False,
     }
-    window_recent, window_relevant, include_resolved, memo_trace = resolve_windows(
-        args.window_recent, args.window_relevant, args.include_resolved_hooks, memo_flags,
+    window_recent, window_relevant, include_resolved, scan_volume_summaries, memo_trace = resolve_windows(
+        args.window_recent, args.window_relevant,
+        args.include_resolved_hooks, args.scan_volume_summaries,
+        memo_flags,
     )
 
     # 1. Recent window — full content
@@ -482,6 +591,16 @@ def main() -> int:
     matrix_rows = parse_character_matrix(matrix_md)
     roster = select_character_roster(matrix_rows, chars_in_window)
 
+    # 7. (optional) Cross-volume callbacks via volume_summaries.md substring scan
+    relevant_volumes: list[dict] = []
+    if scan_volume_summaries:
+        vol_md = read_text(book / "story" / "volume_summaries.md")
+        if vol_md:
+            volumes = parse_volume_summaries(vol_md)
+            relevant_volumes = select_relevant_volume_summaries(
+                volumes, args.current_chapter, anchor_terms,
+            )
+
     payload = {
         "currentChapter": args.current_chapter,
         "recentSummaries": recent,
@@ -489,15 +608,18 @@ def main() -> int:
         "activeHooks": active_hooks,
         "recentlyResolvedHooks": recently_resolved,
         "characterRoster": roster,
+        "relevantVolumeSummaries": relevant_volumes,
         "currentState": current_state if isinstance(current_state, dict) else {},
         "stats": {
             "recentCount": len(recent),
             "relevantCount": len(relevant),
             "activeHookCount": len(active_hooks),
+            "relevantVolumeCount": len(relevant_volumes),
             "totalChars": 0,  # filled in below
             "windowRecent": window_recent,
             "windowRelevant": window_relevant,
             "includeResolvedHooks": include_resolved,
+            "scanVolumeSummaries": scan_volume_summaries,
             "memoFlags": memo_flags,
             "memoFlagApplied": memo_trace,
         },

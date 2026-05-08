@@ -213,6 +213,26 @@ defer:
   | `pacingNotes` 含 "transitional dominant" | `## 不要做` 加一条："本章不要再写过渡 / 日常段，必须有冲突或决策" |
 
   这些是**软建议**——`current_focus.md` 或 hook 账上的硬约束可以否决。脚本失败（IO 错误）→ 跳过本步，不阻断。
+
+1b'. **载入上章 readerExpectationSignal**（仅当 `chapterNumber > 1`）：跑 `python {SKILL_ROOT}/scripts/audit_round_log.py --book <bookDir> --chapter <chapterNumber - 1> --analyze --json`，从输出的顶层 `readerExpectationSignal` 字段取 5 个键（`moodAtExit` / `intensityLevel` / `openExpectations` / `nextChapterPosture` / `rationale`）。按下表分流进 memo：
+
+  | nextChapterPosture | 进 memo 哪一段 / 怎么处理 |
+  |---|---|
+  | `release-promised` | `## 当前任务` 必须明示对应 `openExpectations` 至少一条的兑现路径；`## 章尾必须发生的改变` 至少含一条**信息或权力级**改变 |
+  | `delay-allowed` | `## 读者此刻在等什么` 直接 echo `openExpectations`；当前任务保持灵活，可故意不释放以蓄势 |
+  | `must-escalate` | `## 当前任务` 加"升级"动作；`## 不要做` 加"本章不允许把张力写软" |
+  | `stabilize` | `## 日常/过渡承担什么任务` 提示给一段缓口气；`## 不要做` 加"不要再连续推高强度，让读者休整" |
+  | `free` | 不做强约束；`openExpectations` 仍可选用作软参考 |
+
+  脚本失败 / 字段为 null（如上章未走 audit-revise 闭环）→ 跳过本步，不阻断。**与 1a' audit_drift 的区别**：drift 关注"哪些 issue 没改干净"（修补维度），而 expectation signal 关注"读者情绪曲线在哪、下章应是什么节奏姿态"（节奏维度）。两者并行，不冲突。
+
+1c. **载入章末勾子分布**（仅当 `chapterNumber > 1`）：读 `story/state/cliffhanger_history.json`，取最近 6 行（不足 6 章就有几行用几行），统计 `type` 频次：
+  - 如果**最近 3 章里同一 type 出现 ≥ 2 次**，把该 type 写进 `## 不要做` 段："最近三章已用过 N 次 X 型勾子，本章章末换一种"——并在最近 6 章未出现过的 type 里挑 1-2 个候选写在 `## 章尾必须发生的改变` 段下方作为方向提示
+  - 如果**最近 6 章里同一 type 出现 ≥ 4 次**（高度过度依赖），即使本章 hook 账逻辑指向那个 type，也优先建议换招——把这条作为**强建议**写进 `## 章尾必须发生的改变` 上方，措辞类似 "近 6 章已 4 次 revelation 收尾，本章宁可弱一档强度也要换 type"
+  - 文件不存在 / 行数不足 / 解析失败 → 跳过此步，不阻断
+
+  这一步的作用是**抑制 LLM 反复用同一招章末勾子**——本系统观察 Settler `cliffhangerEntry` 的产出后，发现 `revelation` 是 LLM 最易过度使用的类型。详见 [runtime-state-delta.md §7c](../schemas/runtime-state-delta.md#7c-cliffhangerentry-子-schema章末勾子记录)。
+
 2. **筛 stale hooks**：扫 `story/state/hooks.json`，挑出 `status ∈ {pressured, near_payoff}` 且 `chapterNumber - lastAdvancedChapter >= 5` 的 hook，作为「必须本章处理」清单注入用户消息。
 3. **判定 isGoldenOpening**：`chapterNumber <= 3` → true，并附加黄金三章指引段（见下文）。
 4. **拼装用户消息**。按 inkos `PLANNER_MEMO_USER_TEMPLATE` 的 7 段结构填模板：brief_block / 上一章最后一屏 / 最近 3 章摘要 / 当前 arc / 主角行 / 对手行 / 协作者行 / 相关 thread / 必须回收的陈旧 hook / 卷外约束。

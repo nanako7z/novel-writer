@@ -97,10 +97,24 @@ python {SKILL_ROOT}/scripts/fatigue_scan.py \
 >       "suggestion": "修改建议"
 >     }
 >   ],
->   "summary": "一句话总结审查结论"
+>   "summary": "一句话总结审查结论",
+>   "readerExpectationSignal": {
+>     "moodAtExit": "tense|deflated|elated|ominous|wistful|grounded",
+>     "intensityLevel": 1-5,
+>     "openExpectations": ["上章末读者最强烈在等什么 1-3 条短句"],
+>     "nextChapterPosture": "release-promised|delay-allowed|must-escalate|stabilize|free",
+>     "rationale": "≤ 80 字一句话解释为什么是这个 posture"
+>   }
 > }
 >
 > 只有当存在 critical 级别问题时，passed 才为 false。
+>
+> readerExpectationSignal 是给**下一章 Planner** 的桥接信号——告诉它本章末读者处于什么情绪状态、在等什么、以及下章应当采取什么姿态。5 个 nextChapterPosture：
+> - `release-promised`：章末已对某事兑现作出承诺（明示或强暗示），下章必须给（哪怕部分）
+> - `delay-allowed`：张力适中，下章可适当延迟兑现以蓄高潮
+> - `must-escalate`：本章已经把张力推得比较高且未释放，下章必须升级或释放，不能松
+> - `stabilize`：本章张力过强（intensity ≥ 5）并已部分释放，下章宜缓口气避免读者疲劳
+> - `free`：章末无明显约束（如纯铺垫章），下章可自由决策
 >
 > overall_score 评分校准：
 > - 95-100：可直接发布，无明显问题

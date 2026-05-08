@@ -8,7 +8,7 @@
 
 | ID | 中文名 | EN name | 适用条件 | 读取的真理文件 | 检查要点 |
 |----|--------|---------|----------|----------------|----------|
-| 1 | OOC检查 | OOC Check | universal（fanfic canon 收紧、fanfic ooc 放宽） | character_matrix.md, fanfic_canon.md（同人模式） | 角色行为/对白是否符合人设；同人 canon 模式严格按 fanfic_canon 角色档案；ooc 模式仅记录不判失败 |
+| 1 | OOC检查 | OOC Check | universal（fanfic canon 收紧、fanfic ooc 放宽） | character_matrix.md, story/roles/<slug>.md#voiceProfile, fanfic_canon.md（同人模式） | 角色行为/对白是否符合人设；**对每个开口角色对照其 voiceProfile 7 项识别记号**——雷区台词清单触线 = critical（不分 fanfic 模式）；用错口头禅 / 句长偏好相反 = warning。同人 canon 模式额外按 fanfic_canon 角色档案严格判；ooc 模式只对 voiceProfile 雷区台词部分判 critical，其余 ooc-acceptable |
 | 2 | 时间线检查 | Timeline Check | universal | current_state.json, chapter_summaries.md, 上一章全文 | 时间推进是否前后一致，无穿越/倒叙错位 |
 | 3 | 设定冲突 | Lore Conflict Check | universal | current_state.json, story_frame, parent_canon/fanfic_canon | 是否违反已确立的世界观/设定 |
 | 4 | 战力崩坏 | Power Scaling Check | universal（按 GenreProfile 启用） | current_state.json（power level）, particle_ledger.md | 角色实力升降合规、与设定的力量体系一致 |

@@ -28,6 +28,7 @@
 | `opening-pattern` | 连续 ≥ 3 章首句使用同类入口（`weather` / `time` / `sound` / `dialogue` / `action`） | 4+ → critical；3 → warning | 与 `ai_tell_scan` 的"开头同构"互补：本检测看模式分类，`ai_tell_scan` 看字面相似度 |
 | `conflict-trope` | 窗口内 ≥ 3 章主冲突形态相同（`fight-reveal` / `pure-fight` / `dialogue-reveal` / `dialogue-heavy` / `action-light`） | 3 → warning；≥4 → critical | 启发式：动作动词 + 揭示标记 + 对白密度组合判定 |
 | `pair-overheat` | 同一 A→B 互动模式（bicker / flirt / threaten）连续 ≥ 3 章主导 | warning | 用关键词频次决定主导模式（每词需 ≥ 3 次才作数） |
+| `style-drift` | 最近章节的 4 项风格指纹（`meanSentenceLen` / `meanParagraphLen` / `rhetoricalDensity` / `dialogueRatio`）相对窗口前 N 章 baseline 的 z-score：≥ 1.5σ → warning；≥ 2.5σ → critical | 见左 | 仅在 `--style-drift` 开启时检测；窗口需 ≥ 3 章；baseline stdev=0 时用 `mean*5%` 作 floor 防 false-quiet。**为什么独立**：单章 ai_tell 抓的是字面 / 句首 / 短模板，本检测抓的是**结构性偏移**——比如某章突然从"中长句叙事"切成"超短句感叹"是 LLM 风格漂移的早期信号 |
 
 ---
 

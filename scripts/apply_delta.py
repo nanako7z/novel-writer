@@ -1062,6 +1062,43 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
             append_text(note_p, str(n))
         modified.append(str(note_p))
 
+    # ── cliffhangerEntry → story/state/cliffhanger_history.json ─────────
+    # See references/schemas/runtime-state-delta.md §7c. Append-only ledger
+    # of how each chapter ended; Planner reads the last 6 rows to spot
+    # over-used cliffhanger types and steer the next chapter elsewhere.
+    if "cliffhangerEntry" in delta:
+        ce = delta.get("cliffhangerEntry")
+        ch_no = delta.get("chapter") if isinstance(delta.get("chapter"), int) else None
+        if isinstance(ce, dict) and ch_no is not None:
+            ch_p = state_dir / "cliffhanger_history.json"
+            cur = load_json(ch_p, {"rows": []})
+            if not isinstance(cur, dict):
+                cur = {"rows": []}
+            cur.setdefault("rows", [])
+            from datetime import datetime, timezone
+            row = {
+                "chapter": ch_no,
+                "type": str(ce.get("type", "")).strip(),
+                "intensity": ce.get("intensity"),
+                "brief": str(ce.get("brief", "")).strip(),
+                "recordedAt": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%S.%f"
+                )[:-3] + "Z",
+            }
+            cur["rows"].append(row)
+            write_json(ch_p, cur)
+            modified.append(str(ch_p))
+        else:
+            warnings.append(
+                "cliffhangerEntry present but malformed (or chapter missing) — skipped"
+            )
+    elif isinstance(delta.get("chapter"), int):
+        # Settler didn't emit cliffhangerEntry — log warning but do not block.
+        warnings.append(
+            "cliffhangerEntry missing — Settler should emit one per chapter "
+            "(use type='none' for pure-buildup chapters); see runtime-state-delta.md §7c"
+        )
+
     # ── docOps (LLM-driven guidance md edits) ───────────────────────────
     # Defense in depth: blacklist enforcement here is independent of the
     # schema check in settler_parse.validate_delta. Schema-fail upstream

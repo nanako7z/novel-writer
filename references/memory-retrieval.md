@@ -113,7 +113,9 @@ Consolidator 解决的是"**远端历史的形态**"问题：把已完结卷的 
 2. 读 memory_retrieve 输出的 recent + relevant —— 当前卷的逐章细节。
 3. 不读 archives —— 那是只读历史档案，只在用户做 spot-fix 修改老章节时才回查。
 
-**memory_retrieve 不感知 Consolidator**：脚本本身不读 `volume_summaries.md` 也不读 archives——那是 Composer 装 contextPackage 时叠在 memory payload 之上的另一层。两个组件解耦运行，靠"活跃表只剩未完卷"这条契约协作。
+**memory_retrieve 默认不感知 Consolidator**——脚本本身不读 archives，也不会**默认**读 `volume_summaries.md`。两层组件靠"活跃表只剩未完卷"这条契约解耦运行。
+
+**例外：跨卷回召**（v2 加）。Composer 装 contextPackage 时已经把 `volume_summaries.md` 全文叠上去（见上一段第 1 步），但那是"全量常驻"。当本章是 arc 切换 / 卷尾收束、需要**精准回召某条远端 hook 或某个角色的更早出场**时，可以跑 `memory_retrieve --scan-volume-summaries`：脚本对 `volume_summaries.md` 做一次按 anchor terms（recent 窗口的角色 + 活跃 hookIds）的 substring 过滤，只保留命中的卷段，写到 payload 的 `relevantVolumeSummaries` 字段。memo flag `arcTransition: true` 会自动开启此 flag。这条路径不替代"全量常驻"——它做的是"在常驻的基础上额外标出与当前 anchor 强相关的卷段"，让 Writer 更难漏看跨卷线索。
 
 **何时跑 Consolidator**：见 [12-consolidator.md 何时进入](phases/12-consolidator.md#何时进入)。简版：`chapter_summaries.json` 行数 ≥ 60 且至少 1 卷已完结时，writeNextChapter 收尾会提示用户。
 

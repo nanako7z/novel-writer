@@ -49,9 +49,11 @@ function writeNextChapter(book):
     # memo flag → 行为：
     #  isGoldenOpening → window-recent=2 window-relevant=0
     #  cliffResolution → --include-resolved-hooks (auto)
-    #  arcTransition  → window-relevant=12
+    #  arcTransition  → window-relevant=12 + --scan-volume-summaries (auto)
     #  volumeFinale   → window-relevant=0 (本卷视角)
     # 显式 CLI 参数覆盖 memo flag。
+    # 跨卷回召：arc 切换或用户明确要求时可加 --scan-volume-summaries，按 anchor
+    # 过滤 story/volume_summaries.md 的卷级段落，输出 relevantVolumeSummaries 字段。
     # 3b. 装配 context_pkg + rule_stack（吃 memory + 题材 profile）
     genreProfile = templates/genres/{book.genre}.md   # 若 id 不在 catalog 回退 other.md
     contextPkg, ruleStack, trace = runComposer(chapterMemo, memory, genreProfile, truth files)
@@ -60,49 +62,21 @@ function writeNextChapter(book):
     #       story/runtime/chapter-{NNNN}.trace.json
 
     # ── 4. (可选) Architect 回顾 ────────────────────────────
-    # 仅在以下条件之一时触发：
-    #  · 首章（chapterNo == 1）且 story_frame.md 缺失或为占位
-    #  · 卷尾切换（volume_map 上标记的边界 OR chapter_memo.arcTransition: true
-    #    —— 后者更可靠，是 Planner 程式化判定的结果，前者是边界推断）
-    #  · 用户显式要求 "重做架构"
+    # 触发条件：首章 + story_frame 占位 / 卷尾切换（memo.arcTransition）/ 用户"重做架构"
     # references/phases/04-architect.md
     if needsFoundation:
-        # runArchitect 内部不是单次 LLM 调用——它现在是一个
-        # Architect ↔ Foundation Reviewer 的回环（整体 ≤ 2 轮）：
-        #   1) Architect 出 5 SECTION（story_frame / volume_map /
-        #      roles / book_rules / pending_hooks）
-        #   2) Foundation Reviewer 在内存里审稿 → verdict
-        #      ∈ {pass, revise, reject}
-        #      （详见 references/foundation-reviewer.md）
-        #   3) pass   → 切分 SECTION 落盘，本步骤完成
-        #      revise → 把 issues + overallFeedback 注回
-        #              Architect 跑第 2 轮，再审一次
-        #              第 2 轮还非 pass → best-effort 落盘
-        #              + architectStatus="review-failed"
-        #      reject → 不落盘，把 issues 抛给用户决策，
-        #              不自动重试，主循环在此中止
-        # Architect 调用次数 ≤ 2；Reviewer 解析失败 / LLM 抽风
-        # 走 Reviewer 内部降级，不消耗 Architect 重做预算。
+        # Architect ↔ Foundation Reviewer 回环 ≤ 2 轮，详见 references/foundation-reviewer.md
+        # verdict pass → 落盘；revise → 注回 issues 跑第 2 轮；reject → 中止主循环让用户决策
         runArchitect(book, fanficCanon if fanfic mode)
 
-        # ── 4a. Architect cascade docOps（必跑）────────────────
-        # references/phases/04-architect.md §"Cascade docOps"
-        # Architect 重写 outline 后，会**额外**产一份 docOps 同步下游
-        # 受影响的指导 md（current_focus / roles/<slug> 等），写到
-        # story/runtime/architect-cascade.delta.json。这一步**不能省略**——
-        # 否则 outline 改了但 current_focus 还引用旧 hookId，下游 Planner
-        # 拿到的就是失同步的指导。
+        # 4a. Architect cascade docOps（必跑；同步 current_focus / roles 等下游 md）
+        # 详见 04-architect.md §"Cascade docOps"
         if exists("story/runtime/architect-cascade.delta.json"):
             python scripts/apply_delta.py --book <bookDir> \
                 --delta story/runtime/architect-cascade.delta.json \
-                --skip-hook-governance --skip-commitment-ledger \
-                --skip-book-metadata
-            # 应用后归档（重命名带章号），避免下章误用：
-            mv story/runtime/architect-cascade.delta.json \
-               story/runtime/architect-cascade.applied-{NNNN}.delta.json
-        # 失败处理：cascade 失败时**报 warning 但不 abort**——下游 Planner
-        # 会读到 drift；如果 docOps 漂移扫描（step 11.0c）在下章发现明显
-        # 失同步会再 flag 一次。
+                --skip-hook-governance --skip-commitment-ledger --skip-book-metadata
+            mv .../architect-cascade.delta.json .../architect-cascade.applied-{NNNN}.delta.json
+        # cascade 失败 → warning 不 abort；step 11.0c drift 扫描会兜底
 
     # ── 5. Write ───────────────────────────────────────────
     # references/phases/05-writer.md
@@ -256,6 +230,18 @@ function writeNextChapter(book):
         lastScore = audit.overall_score
         iter += 1
 
+    # ── 7.5. audit-revise 退出后自动写入 chapters/index.json ──────
+    # 不论 passed 还是 best-effort 退出，都跑一次 --analyze 把
+    # recurringIssues / stagnationDetected / scoreProgression 持久化到
+    # chapters/index.json 的 auditRoundAnalysis 字段，便于事后排查"为什么
+    # 反复修不过"。chapter_index 必须在本章 add/update 之前已建条目。
+    analysisJson = scripts/audit_round_log.py --book <bookDir> \
+                       --chapter chapterNo --analyze --json
+    scripts/chapter_index.py --book <bookDir> update \
+        --chapter chapterNo \
+        --audit-round-analysis "$analysisJson"
+    # 失败不阻断主循环（advisory 写入）；命令失败时只 warn，不 fatal。
+
     # ── 8. Observe ─────────────────────────────────────────
     # references/phases/06-observer.md
     observations = runObserver(draft, current truth files)
@@ -263,8 +249,19 @@ function writeNextChapter(book):
 
     # ── 9. Settle (产出 RuntimeStateDelta) ───────────────────
     # references/phases/07-settler.md
-    delta = runSettler(draft, observations, current truth files)
+    # 9.1 消费上章 drift：若 story/runtime/docops_drift.json 存在，把候选项纳入本章
+    #     Settler 的检查范围（drift 是建议，不是免检；本章必须显式处置：要么改、要么写明
+    #     为什么不改）
+    # 9.2 主动性铁律：按 07-settler.md 的固定 5 项清单显式枚举周边文件
+    #     （current_focus / character_matrix / emotional_arcs / subplot_board / roles）
+    # 9.3 产出 RuntimeStateDelta，docOps 字段必填——哪怕 `{}`，也是"我已显式查过"的承诺
+    delta = runSettler(draft, observations, current truth files,
+                       priorDrift=story/runtime/docops_drift.json)
     # 落盘：story/runtime/chapter-{NNNN}.delta.json
+    #
+    # 闭环关系：上章 11.0c drift 扫描 → 本章 9.1 消费 → 本章正文落盘 →
+    # 本章 11.0c drift 再扫 → 下章 9.1 消费。drift 扫描永远是"为下章 Settler
+    # 提供输入"，而不是"替本章 Settler 兜底漏检"。
 
     # ── 10. 校验并应用 delta（确定性 + hook 治理闸门）──────────
     # apply_delta 内部会自动调 hook_governance.py 的 validate + stale-scan
@@ -283,30 +280,19 @@ function writeNextChapter(book):
 
     # ── 10.5. （可选）Polisher 文字层打磨 ───────────────────────
     # references/phases/11-polisher.md
-    # 仅在 audit 真正过线（非借线）时入场，磨表面不改结构。
-    POLISH_THRESHOLD = 88           # 借线（85-87）跳过，不冒不必要的风险
+    # 单 pass，磨表面不改结构；借线（85-87）跳过——不冒险
+    POLISH_THRESHOLD = 88
     if passed and audit.overall_score >= POLISH_THRESHOLD:
-        polishResult = runPolisher(
-            chapterContent = draft,         # audit 通过的最终态
-            chapterMemo,
-            genreProfile.fatigueWords,
-            language = book.language
-        )
+        polishResult = runPolisher(draft, chapterMemo, genreProfile.fatigueWords, book.language)
         if polishResult.changed:
-            # 备份 audit 通过的原版本，准备覆盖
-            write story/runtime/chapter-{NNNN}.pre-polish.md = draft
+            write story/runtime/chapter-{NNNN}.pre-polish.md = draft   # 备份原版
             postScan = ai_tell_scan + sensitive_scan on polishResult.polishedContent
             if postScan introduced new critical/block:
-                # Polisher 引入了新问题——回退
-                draft 保持原状（pre-polish 备份保留作证据）
-                log status = "polish-reverted-introduced-issues"
+                draft 保持原状; log "polish-reverted-introduced-issues"
             else:
-                draft = polishResult.polishedContent  # 剥掉 [polisher-note] 行
-                # polisher-note 进 polish.json 的 polisherNotes，下一章 Planner 读
-        # 元数据：story/runtime/chapter-{NNNN}.polish.json
+                draft = polishResult.polishedContent  # 剥 [polisher-note]，写 polish.json
     elif passed:
-        log polish: skipped (borderline score=<n>)
-    # audit 未过则根本不到这一步——Reviser 已经在 step 7 处理过了
+        log polish: skipped (borderline)
 
     # ── 11. 最终落盘章节正文 + 章节运营索引 ──────────────────
     # 命名硬约束：最终章节文件**只能**是 `chapters/{NNNN}.md` 或
@@ -333,116 +319,63 @@ function writeNextChapter(book):
         [--review-note "polish-reverted-introduced-issues" if applicable]
     # 退出码非 0 即视为索引写入失败——记 warning 但不 abort（章节正文已落盘）。
 
-    # ── 11.0a 状态快照（State snapshot；rollback 安全网）──────
+    # ── 11.0a 状态快照（rollback 兜底）──────
     # references/state-snapshots.md
-    # 在章节正文 + chapters/index.json 都已落盘后，把当时的 7 个 md 真理文件
-    # + 4 个 state JSON 备份到 story/snapshots/{NNNN}/。后续如果某章把真理状态
-    # 写脏了（hook 推升出错、character_matrix 误覆盖、consolidate 漏归档），
-    # 可以 restore 回这一章那一刻。
-    #   python scripts/snapshot_state.py --book <bookDir> create --chapter chapterNo
-    # 失败处理：**非 fatal**——记 warning 但不 abort。snapshot 是兜底安全网，
-    # 不是 load-bearing 阶段；章节正文已经落盘，下一章照常写。
-    # （consolidator 启动前应单独跑一次 `create --milestone`，这是 phase 12 的责任。）
+    # 备份当前 7 个真理 md + 4 个 state JSON 到 story/snapshots/{NNNN}/
+    python scripts/snapshot_state.py --book <bookDir> create --chapter chapterNo
+    # 失败非 fatal；consolidator 启动前另跑 `create --milestone`（phase 12 的责任）
 
     # ── 11.0b 审计纠偏喂料（audit drift → 下章 Planner）────────
     # references/audit-drift.md
-    # 把本章 audit-revise 最后一轮（即落盘版本对应的那一轮）残留的
-    # critical / warning issue 持久化成 story/audit_drift.md，下一章
-    # Planner 在 phase 02 step 1a 之后必须读它，把每条都映射进
-    # chapter_memo 的"## 不要做" / "## 该兑现的"。issues 列表为空
-    # → 删除 story/audit_drift.md（无 drift），不留陈旧内容。
-    # info severity 一律丢弃；脚本自动顺手 sanitize current_state.md
-    # 里残留的 "## 审计纠偏" 块（老 pipeline 内嵌习惯，向后兼容）。
-    finalAuditIssues = audit.issues   # 来自 step 7 最后一轮 audit；
-                                       # 形如 [{severity, category, description}, ...]
+    # 把 step 7 最后一轮残留的 critical/warning 持久化到 story/audit_drift.md
+    # 下章 Planner step 1a 之后必读，映射进 chapter_memo "不要做"/"该兑现的"
+    # 空 issues → 删 audit_drift.md；info severity 一律丢
+    finalAuditIssues = audit.issues   # 顶层数组
     write story/runtime/chapter-{NNNN}.audit-final-issues.json = finalAuditIssues
-    # 注意 issues.json 是**顶层 JSON 数组**（不是包对象），脚本 _validate_issues 期望 list。
     python scripts/audit_drift.py --book <bookDir> write \
         --chapter chapterNo \
         --issues story/runtime/chapter-{NNNN}.audit-final-issues.json \
         [--lang en if book.language == "en"]
-    # 失败处理：非 fatal——记 warning 但不 abort。drift 是写给下章
-    # Planner 看的"建议性记录"，本章正文已落盘；下次写章 Planner
-    # 没读到 drift 也只是少了一条避坑提示，不会污染真理状态。
+    # 失败非 fatal
 
     # ── 11.0c docOps 漂移扫描（指导 md 是否陈旧）─────────────
     # references/schemas/runtime-state-delta.md §7b
-    # 扫近 N 章（默认 6）的 chapter_summaries，flag 明显的"应该已经被
-    # docOps 改但没改"的指导 md：
-    #   - current_focus.md 引用的章节远落后于 lastAppliedChapter
-    #   - chapter_summaries.characters 里持续出场但 character_matrix /
-    #     roles/ 都没条目的角色
-    #   - events 文本里疑似支线 ID 但 subplot_board 无对应行
-    #   - mood 连续 3 章不变但 emotional_arcs 没记录
-    # 输出 advisory 候选到 story/runtime/docops_drift.json，下一章
-    # Settler prompt 装配时会拼入 user message（"上章 docOps drift 建议"），
-    # 由 Settler 决定是否落实。
-    #   python scripts/docops_drift.py --book <bookDir> --window 6 --write
-    # 失败处理：非 fatal——脚本自带 exit 0（advisory），无候选时自动
-    # 删除旧 docops_drift.json，不留陈旧。
+    # 扫近 6 章 summaries，flag "应改未改"的指导 md（current_focus 引用过旧、
+    # 持续出场角色没建 roles 条目、subplot/emotional 漏记等），写 advisory
+    # 到 story/runtime/docops_drift.json，下章 Settler 装配 prompt 时拼入
+    python scripts/docops_drift.py --book <bookDir> --window 6 --write
+    # 失败非 fatal；无候选时脚本自动删旧文件
 
-    # ── 11.05 Chapter Analyzer (post-persist 定性回顾) ─────────
+    # ── 11.05 Chapter Analyzer（post-persist 单向只读回顾）─────
     # references/phases/13-analyzer.md
-    # 章节正文 + 真理文件全部定稿后，跑一次单向只读的定性回顾。
-    # 产物 chapter-{NNNN}.analysis.json 是给下一章 Planner 的喂料——
-    # 关心的是"读起来怎么样、对下一章有什么交代"，不是事实增量
-    # （事实增量是 Settler 在 step 9 干的）。
+    # 产物 chapter-{NNNN}.analysis.json 是给下章 Planner 的"读起来怎么样"喂料
+    # 不修改 chapters/* / story/state/* —— 与 Settler 的事实增量分工
     analysis = runChapterAnalyzer(
-        chapterFile        = chapters/{NNNN}.md,           # Polisher 后的最终版
-        chapterMemo        = story/runtime/chapter_memo.md
-                          OR story/runtime/chapter-{NNNN}.intent.md,
-        auditResult        = story/runtime/chapter-{NNNN}.audit.json (可选),
-        observations       = story/runtime/observations.md (可选),
-        hooksSnapshot      = story/state/hooks.json,
-        genreProfile       = templates/genres/{book.genre}.md,
-        bookConfig         = book.json
+        chapterFile = chapters/{NNNN}.md,
+        chapterMemo = story/runtime/chapter_memo.md OR chapter-{NNNN}.intent.md,
+        auditResult = chapter-{NNNN}.audit.json (可选),
+        observations = observations.md (可选),
+        hooksSnapshot = hooks.json, genreProfile, bookConfig = book.json
     )
-    # 落盘：story/runtime/chapter-{NNNN}.analysis.json
-    # 失败处理：解析失败重试 ≤ 2，仍失败写 stub（warning="analyzer-failed"），
-    #           不阻断主循环——Analyzer 是信息性的，不是 load-bearing。
-    # 关键不变量：Analyzer 单向只读，绝不修改 chapters/* 或 story/state/*。
+    # 解析失败重试 ≤ 2，仍失败写 stub（不阻断；Analyzer 非 load-bearing）
 
-    # ── 11.2 卷尾 cross-volume payoff 验证 ──────────────────────
+    # ── 11.2 卷尾 cross-volume payoff 验证（仅卷末章触发）────────
     # references/hook-governance.md §8d
-    # 仅当本章是某卷的最后一章（chapterNo == volume.endCh）时触发一次。
-    # 读 story/outline/volume_map.md（fallback volume_outline.md）找到
-    # 当前 volumeNumber，跑：
-    #   python scripts/hook_governance.py --book <bookDir> \
-    #          --command volume-payoff --volume <volumeNumber>
-    # 输出含 hooksOpenedInVolume / hooksResolvedByEnd / payoffRate / issues。
-    #
-    # critical issue（committedToChapter 破产 / coreHook 卷尾未兑现）→
-    # **不阻断**本章落盘（章节正文已经过 audit + apply_delta 闸门）；改为
-    # 把概要写到 chapters/index.json 第 chapterNo 行的 reviewNote 字段，
-    # 提示作者本卷尾欠账，下卷 Planner 必须先把这些 hook 圈进 advance/
-    # resolve（或显式 commit-payoff 到下卷某章）。
-    #
-    # 没有 volume_map → 脚本返回 ok=true + warning，graceful 跳过。
-    # 不在卷尾 → 整步跳过。
-    isVolumeFinale = (volume_map 解析得到的 endCh == chapterNo)
+    # critical（committedToChapter 破产 / coreHook 卷尾未兑现）→ 不阻断落盘，
+    # 改为写 chapters/index.json 该章 reviewNote 提示作者下卷必须圈进 advance/resolve
+    isVolumeFinale = (volume_map.endCh == chapterNo)
     if isVolumeFinale:
-        vp = scripts/hook_governance.py --command volume-payoff \
-                --book <bookDir> --volume volumeNumber
+        vp = scripts/hook_governance.py --command volume-payoff --volume volumeNumber
         if vp.issues 含 critical:
             chapter_index.py set-status --chapter chapterNo \
               --review-note "volume-payoff: <vp.summary>"
+    # 没有 volume_map → 脚本 graceful 跳过
 
-    # ── 11.1 (可选) Consolidate 自动建议 —— 不擅自跑 ──────────
+    # ── 11.1 (可选) Consolidate 建议（不擅自跑）──────────
     # references/phases/12-consolidator.md
-    # 落盘 + manifest 更新后，跑一次只读检测脚本：
-    #   python scripts/consolidate_check.py --book <bookDir> --threshold 60 --json
-    # 若返回 shouldConsolidate=true（章节摘要 ≥ 60 行 且 至少有 1 卷已完结
-    # 且 该卷尚未归档），向用户**提示一句**：
-    #   "前面 N 卷已完结，章节摘要 K 条，要不要做一次 consolidate？"
-    # 用户点头才进 phase 12；不点头就放着，下次写完再问。
-    # 严禁自动跑 consolidate——它会重写 chapter_summaries.json，是有损操作。
-    #
-    # 进入 phase 12 后的自动 hook promote-pass：phase 12 step 4 会 verbatim
-    # 调 `hook_governance.py promote-pass`（移植 inkos rerunAdvancedCountPromotion）——
-    # 卷压缩后，老 hook 的 advancedCount 可能跨过 ≥2 阈值，需要重判 `promoted` flag。
-    # Claude 跑到 phase 12 时**必须**按 12-consolidator.md step 4 执行此命令；
-    # 不能因为"主循环已经在 step 10.1 跑过 promote-pass"就跳过——consolidate 改了
-    # 章节摘要分布，advancedCount 估算依据变了。
+    # consolidate_check 若 shouldConsolidate=true → 向用户提示，**点头才进 phase 12**
+    # 严禁自动跑（重写 chapter_summaries.json 是有损）；phase 12 step 4 会再跑一次
+    # promote-pass（卷压缩后 advancedCount 变化，需重判 promoted flag）
 
     return {
         chapterNumber: chapterNo,

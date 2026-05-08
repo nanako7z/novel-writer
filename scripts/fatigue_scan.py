@@ -393,6 +393,127 @@ def detect_pair_overheat(chapters: dict[int, str]) -> list[dict]:
 # ─────────────────── main ─────────────────────────────────────
 
 
+_SENT_SPLIT_RE = re.compile(r"[。！？]+")
+_RHET_PUNCT_RE = re.compile(r"[？！…—]")
+_DIALOGUE_SPAN_RE = re.compile(r"[""「].*?[""」]", re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
+_LEADING_HEADING_RE = re.compile(r"^#+ .*$", re.MULTILINE)
+
+
+def _strip_meta(text: str) -> str:
+    """Strip frontmatter and markdown headings before metric calc."""
+    body = _FRONTMATTER_RE.sub("", text, count=1)
+    body = _LEADING_HEADING_RE.sub("", body)
+    return body
+
+
+def _chapter_style_metrics(text: str) -> dict:
+    """Per-chapter style fingerprint: sentence/paragraph length, rhetorical
+    density, dialogue ratio. All length metrics use punctuation-stripped
+    char count to keep stylistic shifts (e.g., dropping commas) from
+    flipping the signal.
+    """
+    body = _strip_meta(text)
+    body_strip_len = len(strip_punct(body))
+    if body_strip_len == 0:
+        return {
+            "meanSentenceLen": 0.0,
+            "meanParagraphLen": 0.0,
+            "rhetoricalDensity": 0.0,
+            "dialogueRatio": 0.0,
+        }
+
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+    sentences = [s.strip() for s in _SENT_SPLIT_RE.split(body) if s.strip()]
+
+    sent_lens = [len(strip_punct(s)) for s in sentences]
+    mean_sent_len = (sum(sent_lens) / len(sent_lens)) if sent_lens else 0.0
+
+    para_lens = [len(strip_punct(p)) for p in paragraphs]
+    mean_para_len = (sum(para_lens) / len(para_lens)) if para_lens else 0.0
+
+    rhet_count = len(_RHET_PUNCT_RE.findall(body))
+    rhet_density = rhet_count / body_strip_len * 1000.0  # per 1k chars
+
+    dialogue_chars = sum(len(strip_punct(m.group())) for m in _DIALOGUE_SPAN_RE.finditer(body))
+    dialogue_ratio = dialogue_chars / body_strip_len
+
+    return {
+        "meanSentenceLen": round(mean_sent_len, 2),
+        "meanParagraphLen": round(mean_para_len, 2),
+        "rhetoricalDensity": round(rhet_density, 2),
+        "dialogueRatio": round(dialogue_ratio, 3),
+    }
+
+
+def detect_style_drift(chapters: dict[int, str]) -> list[dict]:
+    """Flag the latest chapter when its style metrics deviate from the
+    window mean by ≥ 1.5σ (warning) or ≥ 2.5σ (critical).
+
+    Style drift across 5 sliding chapters is the cheapest early warning
+    that a long-running book has wandered off its established voice. We
+    compute four metrics — sentence length, paragraph length, rhetorical
+    density (?!…—), dialogue ratio — and z-score the latest chapter
+    against the rest of the window.
+
+    Needs ≥ 3 chapters in window to be statistically meaningful; returns
+    [] otherwise.
+    """
+    if len(chapters) < 3:
+        return []
+
+    import statistics
+
+    metrics_per_ch = {n: _chapter_style_metrics(chapters[n]) for n in chapters}
+    if not metrics_per_ch:
+        return []
+    latest = max(metrics_per_ch.keys())
+    keys = ["meanSentenceLen", "meanParagraphLen", "rhetoricalDensity", "dialogueRatio"]
+
+    issues: list[dict] = []
+    for key in keys:
+        # baseline = window minus the latest chapter (so we don't compare
+        # the latest against itself).
+        baseline_values = [
+            metrics_per_ch[n][key] for n in metrics_per_ch if n != latest
+        ]
+        if len(baseline_values) < 2:
+            continue
+        try:
+            mean = statistics.mean(baseline_values)
+            stdev = statistics.stdev(baseline_values)
+        except statistics.StatisticsError:
+            continue
+        # If baseline stdev is degenerate (identical values), fall back to
+        # 5% of |mean| as the noise floor — prevents an unstable z but keeps
+        # large deviations visible. Skip entirely when both are 0.
+        if stdev < 1e-6:
+            if abs(mean) < 1e-6:
+                continue
+            stdev = max(abs(mean) * 0.05, 1e-6)
+        latest_val = metrics_per_ch[latest][key]
+        z = (latest_val - mean) / stdev
+        if abs(z) >= 2.5:
+            sev = "critical"
+        elif abs(z) >= 1.5:
+            sev = "warning"
+        else:
+            continue
+        issues.append({
+            "severity": sev,
+            "category": "style-drift",
+            "description": (
+                f"ch{latest} {key}={latest_val:g} 偏离前 {len(baseline_values)} 章均值 "
+                f"{mean:.2f}（基线 stdev={stdev:.2f}），z={z:+.2f}"
+            ),
+            "evidence": [
+                {"chapter": n, "value": metrics_per_ch[n][key]}
+                for n in sorted(metrics_per_ch)
+            ],
+        })
+    return issues
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Long-span (multi-chapter) fatigue scan.",
@@ -409,6 +530,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--genre-fatigue-words", action="store_true",
                    help="also load and scan the genre profile's fatigueWords list")
     p.add_argument("--draft", help="optional path to current draft (counted as chapter N)")
+    p.add_argument("--style-drift", action="store_true",
+                   help=("also run cross-chapter style-fingerprint drift detection "
+                         "(sentence/paragraph length, rhetorical density, dialogue ratio); "
+                         "flags ≥ 1.5σ z-score deviations from the window baseline"))
     p.add_argument("--json", action="store_true", help="output JSON (default true)")
     return p.parse_args()
 
@@ -452,6 +577,9 @@ def main() -> int:
         issues.extend(detect_opening_pattern_reuse(chapters))
         issues.extend(detect_conflict_trope_reuse(chapters))
         issues.extend(detect_pair_overheat(chapters))
+
+    if args.style_drift:
+        issues.extend(detect_style_drift(chapters))
 
     crit = sum(1 for i in issues if i["severity"] == "critical")
     warn = sum(1 for i in issues if i["severity"] == "warning")

@@ -274,79 +274,47 @@ enableFullCastTracking: false
 - `story/roles/主要角色/<name>.md` 与 `story/roles/次要角色/<name>.md` ——一人一卡 prose，主角卡含完整 8 个 ## 子标题。**roles/ 是角色弧线的唯一权威来源**——`character_matrix.md` 不是。
 - `story/pending_hooks.md` ——12 列 Markdown 表（hook_id / 起始章节 / 类型 / 状态 / 最近推进 / 预期回收 / 回收节奏 / 上游依赖 / 回收卷 / 核心 / 半衰期 / 备注），≤ 2000 chars
 
-### Compat shim（兼容老路径，下游读取顺序 frontmatter → flat）
+### Compat shim（双轨，下游读取顺序 frontmatter → flat）
 
-- `story/book_rules.md` —— compat shim，**与 story_frame frontmatter 保持同步**。Architect 同时写两份；下游工具读取顺序：
-  1. 先读 `story/outline/story_frame.md` 顶部 YAML frontmatter（权威）
-  2. 缺/解析失败时 fallback 到 `story/book_rules.md`（shim）
-- `story/character_matrix.md` —— compat shim，由 Architect 从 roles/ 聚合生成（每个 ## 块对应一个 roles 文件）。下游读取顺序：
-  1. 先读 `story/roles/主要角色/*.md` + `story/roles/次要角色/*.md`（权威）
-  2. 缺/解析失败时 fallback 到 `story/character_matrix.md`（shim）
+- `story/book_rules.md` ← shim，与 story_frame frontmatter 同步；下游先读 frontmatter，缺/失败 fallback 到本文件
+- `story/character_matrix.md` ← shim，从 roles/ 聚合生成；下游先读 roles/，缺/失败 fallback 到本文件
 
-### 为什么走双轨
-
-- Phase 5+ 工具链（commitment_ledger / hook_governance / state_project 等）按 frontmatter-first 顺序读
-- Phase 4 及更早（或外部工具直接 cat 读）按 flat 文件读
-- Architect 同时写两份保证两种读法都能拿到一致数据
-- 重构时只动权威文件，跑一次 Architect revise 重新生成 shim 即可
+**双轨理由**：Phase 5+ 工具链按 frontmatter-first 读，外部工具直 cat 按 flat 读，Architect 同写两份保一致。重构只动权威文件，跑一次 Architect revise 重生成 shim。
 
 ### Cascade docOps（Architect 重做大纲时刷新下游）
 
-Architect 重写 outline 时，5 SECTION 用整文件覆写——但 outline 改动会**让下游指导 md 与新 outline 失同步**：原 `current_focus.md` 的下条焦点可能引用了已删除的钩子；某个 role 的"当前现状"可能已被 outline 改变。
+Architect 重写 outline 后，下游指导 md 与新 outline 失同步——current_focus 引用已删钩子、某 role 的"当前现状"被 outline 改变。
 
-为了避免这个失同步坑，Architect 出完 5 SECTION + Foundation Reviewer pass **之后**，再额外产一份 docOps（同步白名单中受影响的 md），写到 `story/runtime/architect-cascade.delta.json`，形如：
+5 SECTION + Foundation Reviewer pass **之后**额外产一份 docOps，写到 `story/runtime/architect-cascade.delta.json`：
 
 ```json
 {
   "chapter": <manifest.lastAppliedChapter>,
   "docOps": {
-    "currentFocus": [
-      {
-        "op": "replace_section",
-        "anchor": "## Active Focus",
-        "newContent": "...（按新 outline 重写的近 1-3 章焦点）",
-        "reason": "Architect 重做：旧焦点引用的钩子已不在新 pending_hooks 里",
-        "sourcePhase": "architect",
-        "sourceChapter": <n>
-      }
-    ],
-    "roles": [
-      {
-        "op": "patch_role_section",
-        "slug": "lin-qiu",
-        "anchor": "## 当前现状",
-        "newContent": "...（按新 roles/<slug>.md 派生）",
-        "reason": "Architect 重做：主角弧线起点改变",
-        "sourcePhase": "architect",
-        "sourceChapter": <n>
-      }
-    ]
+    "currentFocus": [{ "op": "replace_section", "anchor": "## Active Focus",
+      "newContent": "...", "reason": "Architect 重做：旧焦点引用的钩子已不在",
+      "sourcePhase": "architect", "sourceChapter": <n> }],
+    "roles": [{ "op": "patch_role_section", "slug": "lin-qiu",
+      "anchor": "## 当前现状", "newContent": "...",
+      "reason": "Architect 重做：主角弧线起点改变",
+      "sourcePhase": "architect", "sourceChapter": <n> }]
   }
 }
 ```
 
-主循环在 Architect 落盘后调：
+主循环 step 4a 自动调 `apply_delta.py --skip-hook-governance --skip-commitment-ledger --skip-book-metadata` 落盘。
 
-```bash
-python scripts/apply_delta.py --book <bookDir> --delta story/runtime/architect-cascade.delta.json --skip-hook-governance --skip-commitment-ledger --skip-book-metadata
-```
-
-**只 cascade 白名单 md**（current_focus / character_matrix / emotional_arcs / subplot_board / roles/*）；outline 自身（story_frame / volume_map）已经是整文件覆写，**不再**通过 docOps 改一次。**绝不**动作者宪法（author_intent / book_rules / fanfic_canon / parent_canon）——这些由作者明示指令时直 Edit。
+**只 cascade 白名单 md**（current_focus / character_matrix / emotional_arcs / subplot_board / roles/*）；outline 自身（story_frame / volume_map）已整文件覆写，不再 docOps 二改。**绝不**动作者宪法（author_intent / book_rules / fanfic_canon / parent_canon）。
 
 ## Failure handling
 
-参 inkos：Architect 最多 2 轮——第 1 轮 Architect + Foundation Reviewer，必要时 + 第 2 轮 Architect + Foundation Reviewer。
+Architect ≤ 2 轮（第 1 轮 + 必要时第 2 轮，每轮跟一次 Foundation Reviewer），按 verdict 分流：
 
-按 Reviewer verdict 分流：
+- **`pass`** → 切分 SECTION 落盘
+- **`revise`**（含 Reviewer 解析失败降级的 structural issue）→ `reviewFeedbackBlock`（issues + overallFeedback）注回 Architect 跑第 2 轮 + 再审；第 2 轮仍 ≠ pass 则 best-effort 落盘 + `architectStatus: "review-failed"` 写到 `story/runtime/architect-review.json`，**不再**第 3 轮
+- **`reject`**（方向性崩塌，score < 50 或多维度 < 50）→ **不落盘、不自动重试**，issues 抛给用户决策（改 brief / 题材）
 
-- **`verdict: pass`**：切分 SECTION 落盘，进入下一阶段。本轮预算消耗 0 次重做。
-- **`verdict: revise`**（包括 Reviewer 解析失败时降级返回的 structural-format issue）：把 reviewer 的 `issues` 列表 + `overallFeedback` 拼成 `reviewFeedbackBlock` 附到 Architect 的 user message，跑第 2 轮 Architect → 再过一次 Reviewer。
-  - 第 2 轮 Reviewer 仍 ≠ pass → best-effort 落盘，写 `architectStatus: "review-failed"` 到 `story/runtime/architect-review.json`，把 issues 列表附在文件里给 Planner 后续兜底用，**不再**自动跑第 3 轮。
-- **`verdict: reject`**（设定方向性崩塌，score < 50 或多维度 < 50）：**不落盘、不自动重试**。把 Reviewer 给的 issues + overallFeedback 直接抛给用户，附一句"基础设定方向上有问题，建议你看一下后再决定是改 brief 还是改题材"，等用户拍板才能重跑。
-
-预算超限的处理：自删后再写一次本 SECTION，不算重试次数（这是 Architect 自己的 SECTION 内自检，不走 Reviewer 闸门）。
-
-完整 Reviewer 决策表与解析失败 / 抽风 fallback 见 [references/foundation-reviewer.md](../foundation-reviewer.md#failure-handling)。
+预算超限：自删后重写本 SECTION，不算重试。完整 Reviewer 决策见 [foundation-reviewer.md](../foundation-reviewer.md#failure-handling)。
 
 ## 注意事项
 

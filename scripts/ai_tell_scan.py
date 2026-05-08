@@ -18,7 +18,28 @@ from pathlib import Path
 HEDGE_WORDS_ZH = ["似乎", "可能", "或许", "大概", "某种程度上", "一定程度上", "在某种意义上"]
 TRANSITION_WORDS_ZH = ["然而", "不过", "与此同时", "另一方面", "尽管如此", "话虽如此", "但值得注意的是"]
 SURPRISE_MARKERS = ["仿佛", "忽然", "竟", "竟然", "猛地", "猛然", "不禁", "宛如"]
-ANALYSIS_TERMS = ["核心动机", "信息边界", "推理框架"]
+
+# Analysis-framework / methodology terms that LLMs leak from reasoning
+# scratchpads into chapter prose. Three groups:
+# (1) "report-style" reasoning labels (mirrors post_write_validate REPORT_TERMS;
+#     duplicated here so both scanners flag at their respective stages).
+# (2) Planner methodology terms — Planner is already forbidden from putting
+#     these in chapter_memo (see references/phases/02-planner.md L181), but
+#     LLMs still leak them into the prose body (Writer phase).
+# (3) Narrative-craft framework terms that are educator vocabulary, not
+#     storyteller vocabulary — flag any appearance in the body.
+ANALYSIS_TERMS = [
+    # group 1 — reasoning-report labels (sync with post_write_validate.REPORT_TERMS)
+    "核心动机", "信息边界", "信息落差", "核心风险", "利益最大化",
+    "当前处境", "行为约束", "性格过滤", "情绪外化", "锚定效应",
+    "沉没成本", "认知共鸣", "推理框架",
+    # group 2 — planner methodology (from references/cadence-policy.md / planner)
+    "情绪缺口", "蓄压", "释放阶段", "后效阶段", "cyclePhase",
+    "satisfactionPressure", "satisfactionType", "期待管理",
+    # group 3 — narrative-craft educator terms
+    "叙事张力", "叙事节奏", "叙事弧线", "人物弧光", "角色弧光",
+    "三幕结构", "起承转合", "情节驱动", "戏剧反讽", "主题升华",
+]
 
 SENT_SPLIT = re.compile(r"[。！？\n]+")
 PARA_SPLIT = re.compile(r"\n\s*\n")

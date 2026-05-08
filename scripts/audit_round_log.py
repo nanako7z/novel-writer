@@ -486,6 +486,12 @@ def cmd_analyze(args: argparse.Namespace) -> dict:
     recurring = _analyze_recurring(rounds)
     stagnation = _detect_stagnation(rounds, recurring)
 
+    # Extract readerExpectationSignal from the LAST round's audit object —
+    # this is what the next chapter's Planner reads to set chapter posture.
+    # Field is optional in the audit schema; absent → expose null.
+    last_audit = (rounds[-1].get("audit") or {}) if rounds else {}
+    reader_expectation_signal = last_audit.get("readerExpectationSignal")
+
     # Build a one-line summary.
     last_score = progression[-1] if progression else None
     first_score = progression[0] if progression else None
@@ -517,6 +523,7 @@ def cmd_analyze(args: argparse.Namespace) -> dict:
         "scoreProgression": progression,
         "stagnationDetected": stagnation,
         "recurringIssues": recurring,
+        "readerExpectationSignal": reader_expectation_signal,
         "summary": "; ".join(summary_bits),
     }
 

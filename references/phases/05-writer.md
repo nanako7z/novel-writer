@@ -108,7 +108,7 @@ Writer system prompt 由以下 14 + 1 个具名子段按需拼装（§7.5 是 co
 |---|---|---|
 | 字数越 hard 区间 | `word_count.py` | 立即重写（不走 Normalizer） |
 | 字数越 soft 区间但未越 hard | `word_count.py` | 走 Phase 08 Normalizer 单次 compress / expand |
-| 缺失任一 `=== BLOCK ===` 头 | Writer-Parser | 让 Writer 重新输出**仅缺失部分**（最多 2 次） |
+| 缺失任一 `=== BLOCK ===` 头 | Writer-Parser | 让 Writer 重新输出**仅缺失部分**（最多 2 次）。重写 prompt 必须显式列出"上一次输出缺了哪些 BLOCK 头"+"BLOCK 顺序应是"，不能只说"再补全"——见 [SKILL.md](../../SKILL.md) 主循环不变量第 8 条 |
 | `PRE_WRITE_CHECK` 与 chapter_memo 七段对不上 | Auditor dim 1 检查 | 进入 audit-revise 循环 |
 | 命中 §12 硬性禁令（脚本可正则扫） | `ai_tell_scan.py` 退出码 1 | 立即 `anti-detect` Reviser |
 | 命中政治敏感词（block 级） | `sensitive_scan.py` 退出码 1 | 立即 `anti-detect` Reviser；不允许进入 Settler |

@@ -62,10 +62,7 @@ python {SKILL_ROOT}/scripts/init_book.py \
 
 脚本会落地：根目录 `inkos.json` + `books/<id>/{book.json, story/*, story/state/*, chapters/, story/runtime/, story/outline/, story/roles/...}`。
 
-**当用户在初始请求里就给了创作 brief / 详细立项想法**（"我想写一本…"+ 主题/主角/世界观/卷规划），别让它停在占位 author_intent.md 里——把 brief 通过 `--brief` 直接喂进去。两种姿势：
-
-- 若 brief 已经在某个文件：`--brief path/to/brief.md`
-- 若 brief 是用户消息里的散文：先 `Write` 到一个临时文件（如 `/tmp/brief.md`），再 `--brief /tmp/brief.md`；或用 process substitution `--brief <(echo "...")`（zsh/bash）
+**当用户初始请求里已给 brief**（"我想写一本…"+ 主题/主角/世界观/卷规划），别让它停在占位 author_intent.md 里——通过 `--brief` 喂进去。已有文件直接 `--brief path/to/brief.md`；用户散文先 `Write` 到 `/tmp/brief.md` 再喂。
 
 **初始化后**：检查 init_book 输出的 JSON `nextStep` 字段：
 
@@ -115,6 +112,8 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 4. LLM 输出解析失败：Planner 重试 ≤ 3，Architect ≤ 2（含 [Foundation Reviewer](references/foundation-reviewer.md) 回环），audit-revise 整轮 ≤ 3（上限来自 inkos 实证调参）
 5. Reflector **不是**单独阶段；其职责并入 audit-revise loop
 6. Writer 输出走 sentinel 格式 → `writer_parse.py` + `post_write_validate.py` 是 Normalize 之前的强制检查；critical 命中允许 Writer 重写一次
+7. **每章 Settler 必须主动同步周边状态**：完成正文后，Settler 在产出 delta 前必须**逐项审视** `current_focus` / `character_matrix` / `emotional_arcs` / `subplot_board` / `story/roles/<slug>.md` 是否需更新；不允许把检测责任甩给下一章 [docops_drift](references/phases/00-orchestration.md) 扫描。详细清单见 [07-settler.md](references/phases/07-settler.md) "主动性铁律"
+8. **任一阶段 LLM 输出解析 / 校验失败重跑时，prompt 必须显式注入"上一次失败的具体原因"**——schema 错位、缺哪个块、违反哪条规则、命中哪个治理 issue。不允许只重发原 prompt 让 LLM "再猜一次"。已落地形式：Planner（[02-planner.md](references/phases/02-planner.md) `MEMO_RETRY_LIMIT`）、Architect（Foundation Reviewer 回环把 issues 注回）、Writer post-write retry（`postWriteFeedback`）、Settler（`parserFeedback` / `governanceFeedback`）。新增阶段必须沿用此模式
 
 ## 单点指令（不进主循环）
 
@@ -254,18 +253,17 @@ python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <settler.raw
 python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <runtime/chapter-NNNN.delta.json>
 ```
 
-脚本走 3 阶段 parser：(1) lenient 提 RUNTIME_STATE_DELTA 块（容忍前后 prose）；(2) soft-fix（key alias / 类型 coercion / 数组 wrap，详见 [schemas/runtime-state-delta.md](references/schemas/runtime-state-delta.md) §1b）；(3) 严格 schema 校验。原子写入（`.tmp` + rename），按字段路由到对应文件，并**自动调用** `hook_governance.py` 的 `validate` + `stale-scan` 作为闸门。
+3 阶段 parser：(1) lenient 提 RUNTIME_STATE_DELTA 块；(2) soft-fix（key alias / 类型 coercion / 数组 wrap，详见 [schemas/runtime-state-delta.md](references/schemas/runtime-state-delta.md) §1b）；(3) 严格 schema 校验。原子写入，按字段路由，**自动调用** `hook_governance.py` validate + stale-scan 闸门。
 
-**注意**：apply_delta.py 不写 `chapters/index.json`——那个是**章节运营索引**（status / auditIssues / wordCount / token usage / 时间戳），由 orchestration step 11 完成章节落盘后单独调 [`chapter_index.py`](references/schemas/chapter-index.md) 写。两者关注点不同：apply_delta 管真理文件（叙事增量）；chapter_index 管章节生命周期状态（运营 / 审核 / 出版）。
+**apply_delta 不写 `chapters/index.json`**——那是章节运营索引（status / auditIssues / wordCount），由 orchestration step 11 单独调 [`chapter_index.py`](references/schemas/chapter-index.md)。
 
-apply_delta 的具体行为：
+行为约定：
+- 解析失败 → 返回 `parserFeedback` 喂回 Settler，不 crash
+- `validate` critical → exit 1 + `hookGovernanceBlocked: true`，Settler 重写
+- `stale-scan` → 不阻断，写回 `stale: true` 供后续 Planner 参考
+- 调试不写盘：`scripts/settler_parse.py --input <raw.md> --mode raw --out /tmp/d.json`
 
-- 解析失败：返回 `parserFeedback`（结构化反馈）→ 喂回 Settler 让它修，不是直接 crash
-- `validate` 报 critical → 退出码 1，`hookGovernanceBlocked: true`，要求 Settler 重写而不是落盘
-- `stale-scan` 标记过期钩子 → 不阻断，但写回 `stale: true` 标志供后续 Planner 参考
-- 想跳过治理（不推荐）：`apply_delta.py --skip-hook-governance`
-
-调试 Settler 输出时（不写盘只看解析结果）：`python scripts/settler_parse.py --input <raw.md> --mode raw --out /tmp/d.json`。钩子治理逻辑见 [references/hook-governance.md](references/hook-governance.md)。直写 `story/state/*.json` 视为脏写——见上方主循环不变量 #1。
+钩子治理逻辑见 [references/hook-governance.md](references/hook-governance.md)。直写 `story/state/*.json` 视为脏写——见主循环不变量 #1。
 
 ## 规则栈与题材 profile
 
@@ -298,74 +296,25 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 
 ```
 {SKILL_ROOT}/
-├── SKILL.md                     ← 你正在读
+├── SKILL.md                  ← 你正在读
 ├── references/
-│   ├── phases/00-13-*.md        14 个阶段（编排 + radar + 10 agent + polisher + consolidator + chapter analyzer）
+│   ├── phases/00-13-*.md     14 个阶段（编排 + radar + 10 agent + polisher + consolidator + analyzer）
 │   ├── branches/{fanfic,style}.md
-│   ├── rule-stack.md            四级规则栈
-│   ├── genre-profile.md         15 题材 profile schema + 注入指南
-│   ├── audit-dimensions.md      37 维度全表（按题材 profile 过滤）
-│   ├── ai-tells.md              去 AI 味词表与阈值
-│   ├── sensitive-words.md       三级敏感词
-│   ├── hook-governance.md       伏笔生命周期 + 4 治理命令
-│   ├── memory-retrieval.md      滑窗记忆算法
-│   ├── foundation-reviewer.md   Architect 5-section 产物的 LLM 审稿闸门
-│   ├── post-write-validation.md 写后检规则与 sentinel parser
-│   ├── long-span-fatigue.md     跨章疲劳 5 类检测
-│   ├── pov-filter.md            POV 可见性三档 + blindspots
-│   ├── cadence-policy.md        4 层节奏模型 + per-genre 默认
-│   ├── chapter-recovery.md      断点续跑识别与推荐
-│   ├── state-projections.md     真理文件压缩视图
-│   ├── narrative-control.md     文本上游清洗（实体剥离 + zh/en 软化）
-│   ├── writing-methodology.md   通用写作方法论（6 节，可注入 Writer prompt）
-│   ├── state-snapshots.md       每章真理文件全量快照（snapshots/<N>/）
-│   ├── audit-drift.md           上章审计未达标问题持久化（喂下章 Planner）
-│   ├── context-budget.md        Composer 上下文预算 + drop priority
-│   ├── book-lock.md             advisory 写锁（apply_delta / chapter_index 自动调）
-│   └── schemas/                 6 个数据形状（含 chapter-index, audit-result 含轮 artifact, cadence-policy）
+│   ├── schemas/              6 个数据形状（含 chapter-index, audit-result, cadence-policy 等）
+│   └── *.md                  rule-stack / genre-profile / audit-dimensions / ai-tells / sensitive-words
+│                             / hook-governance / memory-retrieval / foundation-reviewer / post-write-validation
+│                             / long-span-fatigue / pov-filter / cadence-policy / chapter-recovery
+│                             / state-projections / narrative-control / writing-methodology / state-snapshots
+│                             / audit-drift / context-budget / book-lock / role-template / truth-files
 ├── templates/
-│   ├── inkos.json + book.json   元数据种子
-│   ├── story/{*.md, state/*.json}  真理文件种子
-│   └── genres/                  15 题材 profile（init 时按 --genre 选用）
-├── scripts/                     36 个 Python 脚本
-│   ├── init_book.py             创建 books/<id>/ 子树
-│   ├── book.py                  多书 CRUD（list / show / update / rename / delete / copy；删除默认归档）
-│   ├── genre.py                 题材 catalog 管理（list / show / add / validate；user override 优先）
-│   ├── chapter_index.py         章节运营索引（add/update/set-status/list/get/validate；orchestration step 11 自动写）
-│   ├── snapshot_state.py        每章真理文件快照 + 回滚（create/list/show/restore/diff/prune；step 11.0a 自动跑）
-│   ├── audit_drift.py           上章 audit 未达标 issues 持久化（喂下章 Planner；step 11.0b 自动跑）
-│   ├── audit_round_log.py       audit-revise 每轮 artifact（step 7 每轮自动跑；--analyze 检测停滞）
-│   ├── commitment_ledger.py     hook 账兑现校验（audit 前 step 7a 自动跑）
-│   ├── context_budget.py        Composer step 5：13 类预算强制 + drop priority
-│   ├── book_lock.py             advisory 写锁（acquire/release/status；apply_delta + chapter_index 自动调）
-│   ├── apply_delta.py           真理文件唯一写入闸门（3 阶段 parser + hook 仲裁 + governance）
-│   ├── settler_parse.py         Settler 输出独立 parser（debug 用）
-│   ├── hook_governance.py       promote-pass / stale-scan / validate / health-report
-│   ├── hook_arbitrate.py        新候选 → created/mapped/mentioned/rejected 仲裁（apply_delta 自动调）
-│   ├── context_filter.py        truth file 轻量降噪（hooks/summaries/subplots/emotional-arcs）
-│   ├── narrative_control.py     文本实体剥离 + 软化替换（Composer 上游清洗用）
-│   ├── writing_methodology.py   生成 Writer 注入用的写作方法论 markdown
-│   ├── spot_fix_patches.py      phase 10 spot-fix 模式的 patches 应用器
-│   ├── memory_retrieve.py       Composer 阶段 0 调
-│   ├── consolidate_check.py     phase 12 触发检测（read-only）
-│   ├── writer_parse.py          Writer 输出 sentinel 严格 parser
-│   ├── post_write_validate.py   写后检（机械错 / 段落 / 对话标点 / 注释泄漏）
-│   ├── status.py                项目速查（多书 / 单书 / 章节明细）
-│   ├── doctor.py                环境 + 模板 + 脚本自检
-│   ├── analytics.py             token 用量 / 通过率 / 字数曲线 / 钩子活动
-│   ├── fatigue_scan.py          跨章疲劳 5 类检测（advisory）
-│   ├── pov_filter.py            POV 可见性过滤（Composer 单 POV 章节调用）
-│   ├── split_chapter.py         超长章节拆分候选（target × 1.5+ 时入场）
-│   ├── export_book.py           导出 txt / md / epub
-│   ├── recover_chapter.py       断点续跑识别（扫 runtime/ 残留）
-│   ├── cadence_check.py         节奏压力探针（Planner 阶段调）
-│   ├── state_project.py         真理文件 4 类压缩视图
-│   ├── word_count.py            LengthSpec 区间判定
-│   ├── style_analyze.py         5 项纯文本风格统计
-│   ├── ai_tell_scan.py          去 AI 味确定性闸门
-│   └── sensitive_scan.py        三级敏感词扫描
-└── evals/evals.json             SKILL 自身的 7 个测试 prompt
+│   ├── inkos.json + book.json     元数据种子
+│   ├── story/{*.md, state/*.json} 真理文件种子
+│   └── genres/                    15 题材 profile（init 时按 --genre 选用）
+├── scripts/                  36 个 Python 工具脚本
+└── evals/evals.json          SKILL 自身的 7 个测试 prompt
 ```
+
+脚本入口去"单点指令"表查；阶段内细节去对应 phase 文件查。
 
 ## 注意事项
 

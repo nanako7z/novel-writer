@@ -574,6 +574,9 @@ def validate_delta(d) -> list[dict]:
     if "notes" in d and not isinstance(d["notes"], (str, list)):
         errs.append(_ferr("notes", type(d["notes"]).__name__, "string|array<string>"))
 
+    if "cliffhangerEntry" in d:
+        errs.extend(_validate_cliffhanger_entry("cliffhangerEntry", d["cliffhangerEntry"]))
+
     if "docOps" in d:
         errs.extend(_validate_doc_ops("docOps", d["docOps"]))
 
@@ -636,6 +639,40 @@ _DOC_OPS_TABLE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
 
 # Per-target value rules (type / range / enum) on top of presence.
 _DOC_OPS_ARC_DIRECTIONS = ("rising", "falling", "stable", "turning")
+
+# Cliffhanger taxonomy — see references/schemas/runtime-state-delta.md §7c.
+_CLIFFHANGER_TYPES = frozenset({
+    "ambush", "revelation", "betrayal", "ultimatum", "encounter",
+    "transformation", "loss", "discovery", "decision",
+    "secret-exposed", "stakes-raised", "none",
+})
+
+
+def _validate_cliffhanger_entry(path: str, entry) -> list[dict]:
+    """Validate cliffhangerEntry shape: type ∈ taxonomy, intensity ∈ [1,5], brief non-empty."""
+    errs: list[dict] = []
+    if not isinstance(entry, dict):
+        return [_ferr(path, type(entry).__name__, "object")]
+
+    t = entry.get("type")
+    if not isinstance(t, str) or t not in _CLIFFHANGER_TYPES:
+        errs.append(_ferr(
+            f"{path}.type", t,
+            f"one of {sorted(_CLIFFHANGER_TYPES)}",
+        ))
+
+    intensity = entry.get("intensity")
+    if not _is_int(intensity) or intensity < 1 or intensity > 5:
+        errs.append(_ferr(f"{path}.intensity", intensity, "int 1-5"))
+
+    brief = entry.get("brief")
+    if not isinstance(brief, str) or not brief.strip():
+        errs.append(_ferr(f"{path}.brief", brief, "non-empty string"))
+    elif len(brief) > 80:
+        # 50 chars guidance + 30 char latitude; hard cap at 80.
+        errs.append(_ferr(f"{path}.brief", f"{len(brief)} chars", "<= 80 chars"))
+
+    return errs
 
 
 def _validate_emotional_arc_op(path: str, op) -> list[dict]:

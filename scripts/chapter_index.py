@@ -30,6 +30,13 @@ Schema (per `models/chapter.ts` ChapterMetaSchema):
         "promptTokens": 0,
         "completionTokens": 0,
         "totalTokens": 0
+      },
+      "auditRoundAnalysis": {           # optional — `audit_round_log.py --analyze` snapshot
+        "totalRounds": 3,
+        "scoreProgression": [62, 71, 73],
+        "stagnationDetected": true,
+        "recurringIssues": [{"dim": 9, "severity": "critical", "category": "POV"}],
+        "summary": "3 round(s); score 62 -> 73 (delta +11); STAGNATION..."
       }
     }
 
@@ -273,6 +280,8 @@ def cmd_update(args: argparse.Namespace) -> dict:
         changes["tokenUsage"] = _parse_json_arg(args.token_usage, "token-usage")
     if args.length_telemetry is not None:
         changes["lengthTelemetry"] = _parse_json_arg(args.length_telemetry, "length-telemetry")
+    if args.audit_round_analysis is not None:
+        changes["auditRoundAnalysis"] = _parse_json_arg(args.audit_round_analysis, "audit-round-analysis")
 
     if not changes:
         return {"ok": False, "error": "no fields to update; pass at least one --<field>"}
@@ -298,6 +307,7 @@ def cmd_set_status(args: argparse.Namespace) -> dict:
     args.detection_provider = None
     args.token_usage = None
     args.length_telemetry = None
+    args.audit_round_analysis = None
     # status + review-note already on args
     return cmd_update(args)
 
@@ -482,6 +492,8 @@ def _add_optional_metadata_flags(p: argparse.ArgumentParser) -> None:
                    help='JSON object, e.g. \'{"promptTokens": 100, "completionTokens": 200, "totalTokens": 300}\'')
     p.add_argument("--length-telemetry", default=None, dest="length_telemetry",
                    help="JSON object")
+    p.add_argument("--audit-round-analysis", default=None, dest="audit_round_analysis",
+                   help='JSON object from `audit_round_log.py --analyze --json`; pipe via shell: --audit-round-analysis "$(...)"')
 
 
 def main() -> None:
