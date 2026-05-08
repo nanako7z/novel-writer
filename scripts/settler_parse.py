@@ -564,6 +564,13 @@ def validate_delta(d) -> list[dict]:
         if arr_key in d and not isinstance(d[arr_key], list):
             errs.append(_ferr(arr_key, type(d[arr_key]).__name__, "array"))
 
+    # emotionalArcOps row completeness — a partial row (only triggerEvent etc.)
+    # would otherwise be silently translated into a docOps upsert with the
+    # missing columns dropped, producing half-empty rows in emotional_arcs.md.
+    if isinstance(d.get("emotionalArcOps"), list):
+        for i, op in enumerate(d["emotionalArcOps"]):
+            errs.extend(_validate_emotional_arc_op(f"emotionalArcOps[{i}]", op))
+
     if "notes" in d and not isinstance(d["notes"], (str, list)):
         errs.append(_ferr("notes", type(d["notes"]).__name__, "string|array<string>"))
 
@@ -618,6 +625,62 @@ _DOC_OPS_NEW_CONTENT_CAP = {
 }
 _DOC_OPS_ROLE_CAP = 4000
 _DOC_OPS_MAX_BATCH = 20
+
+# Per-target required value columns for table upsert_row. When set, every
+# listed column MUST be present in `op.fields` and non-empty/non-null.
+# Settler emitting a partial row (only triggerEvent etc.) gets rejected at
+# schema validate so the half-empty row never reaches disk.
+_DOC_OPS_TABLE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "emotionalArcs": ("emotionalState", "triggerEvent", "intensity", "arcDirection"),
+}
+
+# Per-target value rules (type / range / enum) on top of presence.
+_DOC_OPS_ARC_DIRECTIONS = ("rising", "falling", "stable", "turning")
+
+
+def _validate_emotional_arc_op(path: str, op) -> list[dict]:
+    """Reject partial emotionalArcOps rows at schema time so the
+    *Ops → docOps translator (which drops missing keys) can't produce
+    half-empty rows on disk. Mirrors the docOps.emotionalArcs upsert_row rules.
+    """
+    errs: list[dict] = []
+    if not isinstance(op, dict):
+        return [_ferr(path, type(op).__name__, "object")]
+
+    character = op.get("character")
+    if not isinstance(character, str) or not character.strip():
+        errs.append(_ferr(f"{path}.character", character, "non-empty string"))
+
+    chapter = op.get("chapter")
+    if not _is_int(chapter) or chapter < 1:
+        errs.append(_ferr(f"{path}.chapter", chapter, "int>=1"))
+
+    required = ("emotionalState", "triggerEvent", "intensity", "arcDirection")
+    missing = [
+        c for c in required
+        if c not in op
+        or op[c] is None
+        or (isinstance(op[c], str) and not op[c].strip())
+    ]
+    if missing:
+        errs.append(_ferr(
+            f"{path}", f"missing/empty: {missing}",
+            f"all of {list(required)} present and non-empty",
+        ))
+
+    intensity = op.get("intensity")
+    if intensity is not None and not (_is_int(intensity) and 1 <= intensity <= 10):
+        errs.append(_ferr(
+            f"{path}.intensity", intensity, "int in [1,10]",
+        ))
+    direction = op.get("arcDirection")
+    if direction is not None and direction not in _DOC_OPS_ARC_DIRECTIONS:
+        errs.append(_ferr(
+            f"{path}.arcDirection",
+            direction,
+            "|".join(_DOC_OPS_ARC_DIRECTIONS),
+        ))
+    return errs
 
 
 def _validate_doc_ops(path_prefix: str, do) -> list[dict]:
@@ -723,6 +786,36 @@ def _validate_doc_op(path: str, target: str, op) -> list[dict]:
             fields = op.get("fields")
             if not isinstance(fields, dict) or not fields:
                 errs.append(_ferr(f"{path}.fields", fields, "non-empty object"))
+            elif kind == "upsert_row":
+                required = _DOC_OPS_TABLE_REQUIRED_FIELDS.get(target)
+                if required:
+                    missing = [
+                        c for c in required
+                        if c not in fields
+                        or fields[c] is None
+                        or (isinstance(fields[c], str) and not fields[c].strip())
+                    ]
+                    if missing:
+                        errs.append(_ferr(
+                            f"{path}.fields",
+                            f"missing/empty: {missing}",
+                            f"all of {list(required)} present and non-empty",
+                        ))
+                if target == "emotionalArcs":
+                    intensity = fields.get("intensity")
+                    if intensity is not None and not (
+                        _is_int(intensity) and 1 <= intensity <= 10
+                    ):
+                        errs.append(_ferr(
+                            f"{path}.fields.intensity", intensity, "int in [1,10]",
+                        ))
+                    direction = fields.get("arcDirection")
+                    if direction is not None and direction not in _DOC_OPS_ARC_DIRECTIONS:
+                        errs.append(_ferr(
+                            f"{path}.fields.arcDirection",
+                            direction,
+                            "|".join(_DOC_OPS_ARC_DIRECTIONS),
+                        ))
         return errs
 
     # roles

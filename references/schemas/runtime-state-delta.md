@@ -198,7 +198,7 @@ truth files updated
 | `newHookCandidates` | array | 是（默认 []） | 候选新伏笔；不直接发明 hookId，由 hook-arbiter 决定映射或新建 |
 | `chapterSummary` | object | 否 | 本章摘要行；省略=不追加摘要（极少见） |
 | `subplotOps` | array<object> | 是（默认 []） | 支线进度变动；schema 宽松（`z.record(z.unknown())`） |
-| `emotionalArcOps` | array<object> | 是（默认 []） | 情感弧线变动；schema 宽松 |
+| `emotionalArcOps` | array<object> | 是（默认 []） | 情感弧线变动；每项**必填**：`character` (string), `chapter` (int≥1), `emotionalState` (string), `triggerEvent` (string), `intensity` (int 1-10), `arcDirection` (`rising`\|`falling`\|`stable`\|`turning`)。缺/空任一列会被拒。 |
 | `characterMatrixOps` | array<object> | 是（默认 []） | 角色交互矩阵变动；schema 宽松 |
 | `notes` | array<string> | 是（默认 []） | 自由文本备注 |
 
