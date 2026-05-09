@@ -101,6 +101,7 @@ EXPECTED_SCRIPTS = [
     "role_arbitrate.py",
     "docops_drift.py",
     "repair_doc_md.py",
+    "radar_fetch.py",
     "e2e_test.py",
 ]
 
@@ -489,6 +490,43 @@ def check_book(book_dir: Path) -> list[dict]:
 
 # ---------- main -----------------------------------------------------------
 
+def check_radar_self_test(timeout_sec: int = 10) -> dict:
+    """Offline parser smoke for the 6 radar adapters.
+
+    Doctor never goes to the network; this only exercises pure-function
+    parse_html / parse_api_response over fixtures embedded in radar_fetch.py.
+    """
+    rf = SKILL_ROOT / "scripts" / "radar_fetch.py"
+    if not rf.is_file():
+        return make("radar adapters self-test", "warning", "scripts/radar_fetch.py missing")
+    try:
+        res = subprocess.run(
+            [sys.executable, str(rf), "self-test"],
+            capture_output=True, text=True, timeout=timeout_sec,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+    except subprocess.TimeoutExpired:
+        return make("radar adapters self-test", "fail", f"timeout after {timeout_sec}s")
+    except Exception as e:  # noqa: BLE001
+        return make("radar adapters self-test", "fail", f"launch failed: {e!r}")
+    try:
+        report = json.loads(res.stdout) if res.stdout.strip() else {}
+    except json.JSONDecodeError:
+        return make("radar adapters self-test", "fail",
+                    f"invalid JSON output (rc={res.returncode})")
+    s = report.get("summary", {})
+    total = s.get("total", 0)
+    passed = s.get("passed", 0)
+    failed = s.get("failed", total - passed)
+    if total == 0:
+        return make("radar adapters self-test", "fail", "no fixtures reported")
+    if failed == 0:
+        return make("radar adapters self-test", "ok", f"{passed}/{total} adapters parse fixtures")
+    bad = [r["site"] for r in report.get("results", []) if not r.get("ok")]
+    return make("radar adapters self-test", "fail",
+                f"{failed}/{total} failed: {','.join(bad[:6])}")
+
+
 def check_e2e_chain(timeout_sec: int = 30) -> dict:
     """Content-level smoke: invoke e2e_test.py to chain all 16 deterministic
     glue scripts against synthesized fixtures. Catches contract drift that
@@ -563,6 +601,7 @@ def main() -> int:
     checks.append(check_templates())
     if not args.skip_script_help:
         checks.extend(check_scripts_help())
+    checks.append(check_radar_self_test())
     if not args.skip_e2e:
         checks.append(check_e2e_chain(timeout_sec=args.e2e_timeout))
 

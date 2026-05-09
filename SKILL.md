@@ -167,6 +167,8 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 | "导出 / 出版 / 打包成 epub/txt/md" | `python scripts/export_book.py --book <bookDir> --format txt\|md\|epub [--include-summary]` |
 | "看下跨章疲劳 / 是不是写重复了" | `python scripts/fatigue_scan.py --book <bookDir> --current-chapter N [--window 5]`（advisory） |
 | "节奏 / 爽点压力 / cadence" | `python scripts/cadence_check.py --book <bookDir> --current-chapter N`（Planner 阶段也会自动跑） |
+| "看下当前网文市场什么火 / 市场雷达 / radar / 现在玄幻什么火" | 进 [phase 01 radar](references/phases/01-radar.md)；该 phase 内部先跑 `radar_fetch.py scan` 三档递进抓榜（fanqie/qidian/feilu/jjwxc/zongheng/sfacg），再走 LLM 分析 |
+| "拉一下番茄玄幻榜 / 单跑 X 平台 Y 题材榜 / radar fetch" | `python scripts/radar_fetch.py scan --sites <id\|all> --genre <id\|all> [--top 15] [--no-cache]`（详见 [phase 01](references/phases/01-radar.md) Stage A + [radar-sources.md](references/radar-sources.md)） |
 | "看下都有哪些题材 / list genres" | `python scripts/genre.py list [--json]` |
 | "看 xianxia 题材 profile / show genre" | `python scripts/genre.py show <id> [--json]` |
 | "新增自定义题材 / 复制 profile 改" | `python scripts/genre.py add <newId> --from <baseId> [--name "..."] [--out <path>]` |
@@ -344,7 +346,7 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 │   ├── inkos.json + book.json     元数据种子
 │   ├── story/{*.md, state/*.json} 真理文件种子
 │   └── genres/                    15 题材 profile（init 时按 --genre 选用）
-├── scripts/                  36 个 Python 工具脚本
+├── scripts/                  37 个 Python 工具脚本（+ scripts/radar/ 6 站 adapter 子包）
 └── evals/evals.json          SKILL 自身的 7 个测试 prompt
 ```
 
