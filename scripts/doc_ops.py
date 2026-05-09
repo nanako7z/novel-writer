@@ -397,6 +397,41 @@ def _apply_section_op(text: str, op: dict) -> tuple[str, str | None, list[str]]:
         i for i, (h, _) in enumerate(parts) if h.strip() == anchor.strip()
     ]
 
+    # Plan A4: detect when the caller's newContent contained a `## X` (now
+    # demoted to `#### X`) whose anchor `## X` *also* exists as a top-level
+    # section elsewhere in the target file.  This is the situation that
+    # produced the "two ## 暂缓项 sections" pollution in the rule-sleeper ch23
+    # session: the LLM tried to refresh both `## Active Focus` and `## 暂缓项`
+    # via a single replace_section, expecting the embedded `## 暂缓项` to
+    # update the sibling section.  We can't safely auto-merge (the embedded
+    # body intent might not match the sibling's body intent), but we surface
+    # a loud notice telling the caller exactly which extra anchor to address
+    # via a separate op (or a follow-up replace_section / delete_section).
+    if any(n == "stripped_leading_anchor" or n.startswith("demoted_embedded_h2_lines")
+           for n in sanitize_notices):
+        # Re-derive demoted headings from the original raw newContent so we
+        # know which sibling anchors they would have aliased to.
+        existing_h2 = {
+            p[0].strip() for p in parts
+            if p[0].strip().startswith("## ") and p[0].strip() != anchor.strip()
+        }
+        embedded_h2: list[str] = []
+        for line in (new_content_raw or "").splitlines():
+            s = line.rstrip().rstrip("\r")
+            if s.strip().startswith("## ") and s.strip() != anchor.strip():
+                embedded_h2.append(s.strip())
+        clashes = [h for h in embedded_h2 if h in existing_h2]
+        if clashes:
+            notices.append(
+                "embedded_h2_clashes_existing_section: "
+                f"newContent embedded {clashes!r} which already exists as "
+                f"sibling section(s) in this file. They were demoted to H4/H5 "
+                "inside the replaced section to keep the file parseable, but "
+                "the original sibling section(s) were NOT touched. To update "
+                "them, add a separate replace_section / delete_section docOp "
+                "for each."
+            )
+
     if kind == "replace_section":
         if not matching_indices:
             return text, f"anchor not found: {anchor!r}", notices

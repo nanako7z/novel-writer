@@ -103,7 +103,7 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 
 **主循环不变量**：单一来源见 [references/invariants.md](references/invariants.md)（11 条编号化规则）。本文件不复述。
 
-**step-checkpoint 强制**（见 invariant #11）：每个 step 入口必须先调 `scripts/loop_state.py require --step <id>`，完成后 `mark`。跳步会被 exit 3 阻止。
+**step-checkpoint 进度跟踪**（见 invariant #11）：每个 step 入口推荐先调 `scripts/loop_state.py require --step <id>`，完成后 `mark`。`require` 间相互识别失序（exit 3），但**不**校验真理文件写脚本（apply_delta / chapter_index / snapshot_state）——它是 advisory 进度可见性，不是硬 gate。硬约束由各脚本自己的 schema 校验（`apply_delta`、`commitment_ledger`、`post_write_validate` 等）兜底。
 
 ## 单点指令（不进主循环）
 
@@ -202,7 +202,7 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 ## 注意事项
 
 - **照搬 inkos 系统 prompt**：每个 phase 文件里的"系统 prompt"块都从 inkos 源码搬来——整段照用，改 prompt 等于改风格基线。
-- **不跳步**：详见 §流程红线 + invariant #11 的 loop_state 强制。用户催"快点写"也按主循环走。
+- **不跳步**：详见 §流程红线；invariant #11 的 loop_state 是 advisory 进度跟踪，硬约束靠各脚本自己的 schema 校验（apply_delta / commitment_ledger / post_write_validate 等）兜底。用户催"快点写"也按主循环走。
 - **失败如实回报**：到达重试上限仍失败，告诉用户哪里不通过，不伪造通过（invariant #4 / #5）。
 - **保持中文**：面向作者和角色的文本都是中文，脚本日志可以英文。
 - **不写 README**：用法直接看本 SKILL.md。

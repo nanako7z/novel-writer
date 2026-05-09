@@ -447,7 +447,36 @@ def check_dialogue_punctuation(body: str) -> list[dict]:
     return issues
 
 
-def check_hard_prohibitions(body: str) -> list[dict]:
+_VALID_SEVERITIES = ("critical", "warning", "info", "off")
+
+
+def _read_em_dash_severity(book_dir: Optional[Path]) -> str:
+    """Read book.json#postWriteRules.emDashSeverity. Default: 'warning'.
+
+    Em-dash 「——」 is a legal CJK punctuation mark; the original hard ban (critical)
+    was empirically too strict — multiple already-published chapters of horror /
+    suspense books use it freely.  Default is now 'warning'; per-book override
+    via book.json#postWriteRules.emDashSeverity = 'critical' | 'warning' | 'info' | 'off'.
+    cf. plan A12.
+    """
+    default = "warning"
+    if book_dir is None:
+        return default
+    book_json = book_dir / "book.json"
+    if not book_json.is_file():
+        return default
+    try:
+        data = json.loads(book_json.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return default
+    rules = data.get("postWriteRules", {})
+    sev = rules.get("emDashSeverity", default)
+    if sev not in _VALID_SEVERITIES:
+        return default
+    return sev
+
+
+def check_hard_prohibitions(body: str, book_dir: Optional[Path] = None) -> list[dict]:
     issues: list[dict] = []
     m = re.search(r"不是[^，。！？\n]{0,30}[，,]?\s*而是", body)
     if m:
@@ -458,12 +487,17 @@ def check_hard_prohibitions(body: str) -> list[dict]:
             "line": _line_of_offset(body, m.start()),
             "evidence": _evidence(body, m.start()),
         })
-    if "——" in body:
+    em_dash_sev = _read_em_dash_severity(book_dir)
+    if em_dash_sev != "off" and "——" in body:
         line = _line_of_substring(body, "——") or 1
+        count = body.count("——")
         issues.append({
-            "severity": "critical",
+            "severity": em_dash_sev,
             "category": "forbidden-pattern",
-            "description": "出现破折号「——」（硬性禁令）",
+            "description": (
+                f"出现破折号「——」（{count} 处；默认 warning，可经 "
+                f"book.json#postWriteRules.emDashSeverity 调整为 critical/info/off）"
+            ),
             "line": line,
             "evidence": _evidence(body, body.find("——")),
         })
@@ -672,7 +706,7 @@ def validate(
     issues += check_chapter_ref_consistency(body, chapter_number, frontmatter, file_stem)
     issues += check_paragraph_shape(body)
     issues += check_dialogue_punctuation(body)
-    issues += check_hard_prohibitions(body)
+    issues += check_hard_prohibitions(body, book_dir)
     issues += check_markers(body)
     issues += check_annotation_leak(body)
     if book_dir is not None:

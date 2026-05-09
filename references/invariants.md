@@ -71,8 +71,11 @@ Step 11.05 的 Chapter Analyzer 只读已定稿章节正文与配套 runtime/sta
 
 Step 10.5 的 Polisher 单 pass、不开回环、引入新问题即回退。借线（score 85-87）跳过；audit 未过则压根不进 Polisher，由 Reviser 兜底。
 
-## #11 — Step-checkpoint 强制（loop_state.py）
+## #11 — Step-checkpoint 进度跟踪（loop_state.py，advisory）
 
-主循环每个 step 入口必须先调 `scripts/loop_state.py require --step <id>`；step 完成必须 `mark --step <id>`。**禁止**跳过 require：跳过会导致下一 step 的 require exit 3。详见 [`loop_state.md`](loop_state.md)。
+主循环每个 step 入口推荐调 `scripts/loop_state.py require --step <id>`；step 完成调 `mark --step <id>`。loop_state 内部链接到 [`loop_state.md`](loop_state.md) 的 step graph，可识别失序的 require（exit 3）。
 
-- 守者：主循环 writeNextChapter；单点指令不强制
+**已知局限（plan A11 后改为诚实表述）**：本规则是**进度可见性**机制，不是**真理文件 gate**。`apply_delta.py` / `chapter_index.py add` / `snapshot_state.py create` 等写真理文件的脚本目前**不**校验 loop_state——也就是说，跳过 require / mark 不会阻止它们写盘。loop_state 是给主循环 LLM 自我打卡 + 给 `loop_state.py status` 提供"我正写到哪一步"的可视化用，而不是硬执行器。
+
+- 守者：主循环 writeNextChapter（advisory）；单点指令不要求
+- 如需"绝对不可跳"的硬 gate，使用脚本本身的契约（如 `apply_delta.py --input-mode raw` 的 schema 校验、`commitment_ledger.py` 的 hook 账兑现校验、`post_write_validate.py` 的 critical 退码 2 等）；loop_state 只是辅助记录

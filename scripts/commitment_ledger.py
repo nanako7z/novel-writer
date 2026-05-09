@@ -136,24 +136,36 @@ def extract_ledger_section(memo_body: str) -> str | None:
     return None
 
 
-def extract_keywords(descriptor: str) -> list[str]:
-    """Pick search tokens out of a ledger descriptor.
+def extract_keywords(descriptor: str, hook_id: str | None = None) -> list[str]:
+    """Pick search tokens out of a ledger descriptor (and optionally the hookId).
 
     Priority 1: quoted hook name — most informative, what writer should echo.
     Priority 2: descriptor text up to the first state-transition arrow
                 (→ or ->). Anything after arrow describes the new state, not
                 the hook itself, so we ignore it (avoids picking up character
                 names that appear elsewhere).
+    Priority 3 (plan A3): tokens derived from `hook_id` itself.  Chinese
+                hookIds like "镜子发热-病理科" carry semantic content
+                independent of the descriptor — splitting on `-`/`_` and
+                extracting each ≥2-char CJK segment gives us a fallback
+                match set, so prose that resolves the hook via a synonym
+                (e.g. "蓄电池便签" instead of literal "加热者") still passes
+                when the hookId itself is name-relevant.
+                ASCII-only short hookIds like "H001"/"S004" contribute
+                nothing useful and are filtered out below.
     """
-    if not descriptor:
+    if not descriptor and not hook_id:
         return []
-    qm = QUOTED_RE.search(descriptor)
+    qm = QUOTED_RE.search(descriptor) if descriptor else None
     if qm:
         source = qm.group(1)
     else:
         # split on the first arrow; fall back to whole descriptor
-        parts = ARROW_SPLIT_RE.split(descriptor, maxsplit=1)
-        source = parts[0] if parts else descriptor
+        if descriptor:
+            parts = ARROW_SPLIT_RE.split(descriptor, maxsplit=1)
+            source = parts[0] if parts else descriptor
+        else:
+            source = ""
 
     tokens: list[str] = []
     for run in CJK_RUN_RE.findall(source):
@@ -165,6 +177,23 @@ def extract_keywords(descriptor: str) -> list[str]:
         w = word.lower()
         if w not in ASCII_STOPWORDS:
             tokens.append(w)
+
+    # Plan A3: also mine the hookId for Chinese tokens (descriptive IDs like
+    # "东城二院-病理科封存" should contribute "东城二院"/"病理科封存"/etc.).
+    # Skip pure-ASCII short codes (H001, S004) — those tell the matcher
+    # nothing and would just fatten the keyword list.
+    if hook_id and not re.fullmatch(r"[A-Za-z]+\d+", hook_id.strip()):
+        # Split on common hyphen/underscore separators, then mine CJK runs.
+        for segment in re.split(r"[-_·／/]+", hook_id):
+            seg = segment.strip()
+            if not seg:
+                continue
+            for run in CJK_RUN_RE.findall(seg):
+                if len(run) >= 2:
+                    tokens.append(run)
+                if len(run) >= 4:
+                    tokens.append(run[:2])
+                    tokens.append(run[-2:])
 
     seen: list[str] = []
     seen_set: set[str] = set()
@@ -198,7 +227,7 @@ def extract_ledger_entry(line: str) -> dict | None:
     return {
         "hookId": candidate,
         "descriptor": descriptor,
-        "keywords": extract_keywords(descriptor),
+        "keywords": extract_keywords(descriptor, candidate),
     }
 
 
@@ -396,10 +425,11 @@ def hook_to_entry(hook: dict) -> dict:
         if isinstance(v, str) and v.strip():
             parts.append(v.strip())
     descriptor = " / ".join(parts)
+    hid = hook.get("hookId") or ""
     return {
-        "hookId": hook.get("hookId") or "",
+        "hookId": hid,
         "descriptor": descriptor,
-        "keywords": extract_keywords(descriptor),
+        "keywords": extract_keywords(descriptor, hid),
     }
 
 

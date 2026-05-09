@@ -350,13 +350,36 @@ def cmd_write(args: argparse.Namespace) -> dict:
     if not book_dir.is_dir():
         return {"ok": False, "error": f"book directory not found: {book_dir}"}
 
-    issues_path = Path(args.issues)
-    if not issues_path.is_file():
-        return {"ok": False, "error": f"issues file not found: {issues_path}"}
-    try:
-        raw = json.loads(issues_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        return {"ok": False, "error": f"invalid JSON in {issues_path}: {e}"}
+    # Accept either a file path OR a JSON literal (string starting with '[' or '{').
+    # This avoids the confusing "issues file not found: []" error when callers pass
+    # a JSON string directly via --issues '[{...}]'.
+    raw_arg = args.issues
+    stripped = raw_arg.lstrip()
+    if stripped.startswith("[") or stripped.startswith("{"):
+        try:
+            raw = json.loads(raw_arg)
+        except json.JSONDecodeError as e:
+            return {
+                "ok": False,
+                "error": (
+                    f"--issues looked like JSON literal but failed to parse: {e}. "
+                    f"input head: {raw_arg[:80]!r}"
+                ),
+            }
+    else:
+        issues_path = Path(raw_arg)
+        if not issues_path.is_file():
+            return {
+                "ok": False,
+                "error": (
+                    f"--issues 解析失败：既不是合法 JSON 字面量（不以 [ 或 {{ 起首），"
+                    f"也不是存在的文件路径。原始输入：{raw_arg[:80]!r}"
+                ),
+            }
+        try:
+            raw = json.loads(issues_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            return {"ok": False, "error": f"invalid JSON in {issues_path}: {e}"}
 
     issues, parse_errors = _validate_issues(raw)
     if parse_errors:

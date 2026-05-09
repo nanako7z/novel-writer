@@ -70,6 +70,14 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--stdin", action="store_true")
     p.add_argument("--threshold-density", type=float, default=3.0,
                    help="hedge density threshold per 1000 chars (default 3.0)")
+    # Accepted but currently unused — kept for CLI uniformity with other gate
+    # scripts (post_write_validate, sensitive_scan, etc.). Future versions may
+    # use --book to load per-book/per-genre fatigueWords overrides.
+    p.add_argument("--book", help="(optional, currently unused) book directory; "
+                   "reserved for per-book fatigueWords overrides")
+    p.add_argument("--json", action="store_true",
+                   help="(no-op) JSON is already the default output format; "
+                   "flag accepted for CLI uniformity")
     return p.parse_args()
 
 

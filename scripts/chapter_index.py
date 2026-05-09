@@ -64,7 +64,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _summary import emit_summary  # noqa: E402
 
-WRITE_COMMANDS = {"add", "update", "set-status"}
+WRITE_COMMANDS = {"add", "update", "set-status", "backfill-length-telemetry"}
 
 from _constants import CHAPTER_STATUS  # noqa: E402  — single source of truth
 from _chapter_files import find_chapter_file, list_chapter_files  # noqa: E402
@@ -203,11 +203,30 @@ def cmd_add(args: argparse.Namespace) -> dict:
     index = _load(book_dir)
     now = _now()
 
+    # Auto-derive wordCount + lengthTelemetry + title from --file when given.
+    # Explicit --word-count / --length-telemetry / --title still win.
+    auto_word_count: int | None = None
+    auto_telemetry: dict[str, Any] | None = None
+    auto_title: str | None = None
+    if getattr(args, "chapter_file", None):
+        chapter_path = Path(args.chapter_file)
+        if not chapter_path.is_file():
+            return {"ok": False, "error": f"chapter file not found: {chapter_path}"}
+        char_count, file_title = _read_chapter_file_stats(chapter_path)
+        auto_word_count = char_count
+        auto_title = file_title
+        target = _load_book_target(book_dir)
+        if target > 0:
+            auto_telemetry = _compute_length_telemetry(char_count, target)
+
+    title = args.title or auto_title or f"第 {args.chapter} 章"
+    word_count = args.word_count if args.word_count is not None else (auto_word_count or 0)
+
     entry: dict[str, Any] = {
         "number": args.chapter,
-        "title": args.title or f"第 {args.chapter} 章",
+        "title": title,
         "status": args.status,
-        "wordCount": args.word_count or 0,
+        "wordCount": word_count,
         "createdAt": now,
         "updatedAt": now,
         "auditIssues": _parse_json_arg(args.audit_issues, "audit-issues") or [],
@@ -225,6 +244,8 @@ def cmd_add(args: argparse.Namespace) -> dict:
     lt = _parse_json_arg(args.length_telemetry, "length-telemetry")
     if lt:
         entry["lengthTelemetry"] = lt
+    elif auto_telemetry:
+        entry["lengthTelemetry"] = auto_telemetry
 
     errors = _validate_entry(entry, full=True)
     if errors:
@@ -347,6 +368,65 @@ def cmd_get(args: argparse.Namespace) -> dict:
     if entry is None:
         return {"ok": False, "error": f"chapter {args.chapter} not in index"}
     return {"ok": True, "entry": entry}
+
+
+def cmd_backfill_length_telemetry(args: argparse.Namespace) -> dict:
+    """Plan A10: walk the index and fill missing lengthTelemetry from disk.
+
+    For each entry in [from_chapter, to_chapter] (defaults to all):
+      - find the chapter file via _chapter_files.find_chapter_file
+      - if file exists: recompute non-whitespace char_count and telemetry
+      - if entry has non-empty `lengthTelemetry` and not --force: skip
+      - if file missing on disk: skip with reason recorded
+    Returns a dict of {filled: [...], skipped: [...]} for caller diagnostics.
+    """
+    book_dir = Path(args.book).resolve()
+    index = _load(book_dir)
+    target = _load_book_target(book_dir)
+    if target <= 0:
+        return {"ok": False, "error": "book.json#chapterWordCount missing or 0; "
+                                       "cannot derive softMin/softMax"}
+    filled: list[dict] = []
+    skipped: list[dict] = []
+    for entry in index:
+        ch_no = entry.get("number")
+        if not isinstance(ch_no, int):
+            continue
+        if args.from_chapter is not None and ch_no < args.from_chapter:
+            continue
+        if args.to_chapter is not None and ch_no > args.to_chapter:
+            continue
+        existing_lt = entry.get("lengthTelemetry") or {}
+        if existing_lt and not args.force:
+            skipped.append({"chapter": ch_no, "reason": "already has lengthTelemetry "
+                                                       "(use --force to overwrite)"})
+            continue
+        chapter_file = find_chapter_file(book_dir, ch_no)
+        if chapter_file is None or not chapter_file.is_file():
+            skipped.append({"chapter": ch_no,
+                            "reason": "chapter file not found on disk"})
+            continue
+        char_count, _ = _read_chapter_file_stats(chapter_file)
+        telemetry = _compute_length_telemetry(char_count, target)
+        if not telemetry:
+            skipped.append({"chapter": ch_no, "reason": "telemetry compute failed"})
+            continue
+        prev = entry.get("lengthTelemetry")
+        entry["lengthTelemetry"] = telemetry
+        # Bump wordCount too if it disagrees (keeps the two fields in lockstep).
+        if entry.get("wordCount") != char_count:
+            entry["wordCount"] = char_count
+        entry["updatedAt"] = _now()
+        filled.append({"chapter": ch_no, "previous": prev or None, "new": telemetry})
+    if filled:
+        _save(book_dir, index)
+    return {
+        "ok": True,
+        "filled": filled,
+        "skipped": skipped,
+        "filledCount": len(filled),
+        "skippedCount": len(skipped),
+    }
 
 
 def cmd_validate(args: argparse.Namespace) -> dict:
@@ -481,6 +561,16 @@ def _format_validate_text(result: dict) -> str:
 def _add_optional_metadata_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--title", default=None, help="chapter title")
     p.add_argument("--word-count", type=int, default=None, dest="word_count")
+    p.add_argument(
+        "--file",
+        default=None,
+        dest="chapter_file",
+        help=(
+            "path to chapter .md; if given, auto-computes wordCount (non-whitespace "
+            "chars) and lengthTelemetry from book.json#chapterWordCount target ±15%. "
+            "Explicit --word-count / --length-telemetry override the auto values."
+        ),
+    )
     p.add_argument("--audit-issues", default=None, dest="audit_issues",
                    help='JSON array, e.g. \'["[critical] xxx", "[warning] yyy"]\'')
     p.add_argument("--length-warnings", default=None, dest="length_warnings",
@@ -494,6 +584,75 @@ def _add_optional_metadata_flags(p: argparse.ArgumentParser) -> None:
                    help="JSON object")
     p.add_argument("--audit-round-analysis", default=None, dest="audit_round_analysis",
                    help='JSON object from `audit_round_log.py --analyze --json`; pipe via shell: --audit-round-analysis "$(...)"')
+
+
+def _compute_length_telemetry(char_count: int, target: int) -> dict[str, Any]:
+    """Compute lengthTelemetry block from char_count + per-chapter target.
+
+    Soft band is ±15% of target (rounded). Status enum:
+      - "in-soft":   softMin <= count <= softMax
+      - "under-soft": count < softMin
+      - "over-soft": count > softMax
+
+    Mirrors the existing telemetry shape seen on chapters 19-21 of rule-sleeper
+    (count / status / target / softMin / softMax). If `target <= 0`, returns an
+    empty dict — caller decides whether to drop or keep.
+    """
+    if target <= 0:
+        return {}
+    soft_min = int(round(target * 0.85))
+    soft_max = int(round(target * 1.15))
+    if char_count < soft_min:
+        status = "under-soft"
+    elif char_count > soft_max:
+        status = "over-soft"
+    else:
+        status = "in-soft"
+    return {
+        "count": char_count,
+        "status": status,
+        "target": target,
+        "softMin": soft_min,
+        "softMax": soft_max,
+    }
+
+
+def _read_chapter_file_stats(path: Path) -> tuple[int, str | None]:
+    """Return (non_whitespace_char_count, first_h1_title_or_None) for a chapter file.
+
+    Title detection: first line that starts with `# ` (after optional frontmatter).
+    Falls back to first non-empty line stripped if no H1 found.
+    """
+    text = path.read_text(encoding="utf-8")
+    # Strip optional YAML frontmatter
+    body = text
+    if body.startswith("---\n") or body.startswith("---\r\n"):
+        end = body.find("\n---", 4)
+        if end != -1:
+            body = body[end + 4:].lstrip("\n")
+    # Find title
+    title: str | None = None
+    for line in body.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("# "):
+            title = s[2:].strip()
+        else:
+            title = s
+        break
+    char_count = sum(1 for c in body if not c.isspace())
+    return char_count, title
+
+
+def _load_book_target(book_dir: Path) -> int:
+    book_json = book_dir / "book.json"
+    if not book_json.is_file():
+        return 0
+    try:
+        return int(json.loads(book_json.read_text(encoding="utf-8")).get("chapterWordCount", 0) or 0)
+    except (json.JSONDecodeError, ValueError, OSError):
+        return 0
 
 
 def main() -> None:
@@ -544,6 +703,21 @@ def main() -> None:
     # validate
     sub.add_parser("validate", help="schema + sequence + file-existence checks")
 
+    # backfill-length-telemetry (plan A10): one-shot helper that walks the
+    # index and fills missing/empty `lengthTelemetry` for any entry whose
+    # corresponding chapter file exists on disk.  Idempotent — entries that
+    # already have non-empty telemetry are left alone unless --force is given.
+    p_bf = sub.add_parser(
+        "backfill-length-telemetry",
+        help="re-derive lengthTelemetry from chapters/*.md for entries missing it",
+    )
+    p_bf.add_argument("--force", action="store_true",
+                      help="overwrite existing lengthTelemetry as well")
+    p_bf.add_argument("--from", type=int, default=None, dest="from_chapter",
+                      help="optional lower bound (inclusive)")
+    p_bf.add_argument("--to", type=int, default=None, dest="to_chapter",
+                      help="optional upper bound (inclusive)")
+
     args = ap.parse_args()
 
     handlers = {
@@ -553,6 +727,7 @@ def main() -> None:
         "list": cmd_list,
         "get": cmd_get,
         "validate": cmd_validate,
+        "backfill-length-telemetry": cmd_backfill_length_telemetry,
     }
 
     # Acquire advisory lock for write commands.

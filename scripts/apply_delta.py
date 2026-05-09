@@ -184,13 +184,44 @@ def merge_dict(dst: dict, patch: dict) -> dict:
     return dst
 
 
+# Reserved hookId values that LLMs occasionally fabricate when mis-parsing
+# the pending_hooks.md table (using header column names as data) or when
+# confused by Settler's "newHookCandidates → hookOps.upsert" path. Rejecting
+# them at apply time prevents stub rows like {"hookId": "hookId", ...} from
+# polluting hooks.json. cf. plan A7.
+RESERVED_HOOK_IDS = frozenset({
+    "hookId", "hookid", "HookId", "HOOK_ID",
+    "status", "type", "open", "progressing", "deferred", "resolved",
+    "mentioned", "near-term", "mid-arc", "slow-burn", "endgame",
+    "newHook", "candidate", "TBD", "todo", "TODO", "null", "None", "",
+})
+
+
 def apply_hook_ops(hooks_obj: dict, ops: dict, warnings: list[str]) -> dict:
     hooks = hooks_obj.get("hooks", [])
-    by_id = {h.get("hookId"): h for h in hooks if isinstance(h, dict)}
+    # Drop pre-existing stub rows whose hookId is a reserved word — these are
+    # historical pollution from before A7 was added; cleaning them on every
+    # apply keeps the hooks.json pure without a separate one-shot migration.
+    cleaned_hooks: list[dict] = []
+    for h in hooks:
+        if not isinstance(h, dict):
+            continue
+        hid = h.get("hookId")
+        if isinstance(hid, str) and hid.strip() in RESERVED_HOOK_IDS:
+            warnings.append(f"dropped stub hook row with reserved hookId={hid!r}")
+            continue
+        cleaned_hooks.append(h)
+    by_id = {h.get("hookId"): h for h in cleaned_hooks}
     for h in ops.get("upsert", []) or []:
         hid = h.get("hookId")
         if not hid:
             warnings.append("upsert hook missing hookId; skipped")
+            continue
+        if isinstance(hid, str) and hid.strip() in RESERVED_HOOK_IDS:
+            warnings.append(
+                f"rejected upsert with reserved hookId={hid!r}; "
+                "use a real hook id or move it to newHookCandidates"
+            )
             continue
         if hid in by_id:
             by_id[hid].update(h)
@@ -1040,7 +1071,28 @@ def _main_apply(args: argparse.Namespace, book: Path, lock_acquired: bool) -> in
             warnings.append(
                 "chapter_summaries.json: migrated wrapper key 'summaries' → 'rows' (inkos parity)"
             )
-        cur.setdefault("rows", []).append(delta["chapterSummary"])
+        # Plan A1: upsert by chapter number (was: blind append).  Re-applying a
+        # delta for chapter N must replace the existing row, not duplicate it.
+        # This makes apply_delta idempotent w.r.t. the chapter_summary part —
+        # the prior append-only behavior caused doubled rows when an earlier
+        # apply attempt failed late (e.g. docOps schema fail) but had already
+        # updated chapter_summaries.json before the failure path returned.
+        new_summary = delta["chapterSummary"]
+        rows = cur.setdefault("rows", [])
+        ch_no = new_summary.get("chapter") if isinstance(new_summary, dict) else None
+        replaced = False
+        if isinstance(ch_no, int):
+            for i, existing in enumerate(rows):
+                if isinstance(existing, dict) and existing.get("chapter") == ch_no:
+                    rows[i] = new_summary
+                    replaced = True
+                    warnings.append(
+                        f"chapter_summaries.json: upserted row for chapter {ch_no} "
+                        "(replaced existing entry; idempotent re-apply)"
+                    )
+                    break
+        if not replaced:
+            rows.append(new_summary)
         write_json(sp, cur)
         modified.append(str(sp))
 

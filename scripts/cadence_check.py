@@ -446,6 +446,19 @@ def lookback_summaries(
 def matches_satisfaction(row: dict[str, Any], satisfaction_types: list[str]) -> bool:
     if not satisfaction_types:
         return False
+    # Primary signal: explicit satisfactionHits list (from Analyzer or Settler);
+    # if any hit overlaps with the genre's satisfactionTypes, it's a match.
+    # Plan A8: this is the authoritative source — fall through to the legacy
+    # blob match only when the field is absent (older chapters / unanalyzed).
+    hits = row.get("satisfactionHits")
+    if isinstance(hits, list) and hits:
+        sat_lower = {t.strip().lower() for t in satisfaction_types if t.strip()}
+        for h in hits:
+            if isinstance(h, str) and h.strip().lower() in sat_lower:
+                return True
+        # If we have explicit hits and none match, trust the explicit signal —
+        # don't fall through to fuzzy blob match (which would generate noise).
+        return False
     blob = " ".join(
         str(row.get(k, ""))
         for k in ("chapterType", "mood", "events", "title")
@@ -881,6 +894,35 @@ def diagnose(
     vol_idx, current_vol = find_current_volume(volumes, current_chapter)
 
     rows = lookback_summaries(summaries, current_chapter, lookback)
+
+    # Enrich each row with `satisfactionHits` from per-chapter Analyzer output
+    # (story/runtime/chapter-{NNNN}.analysis.json#satisfactionHits) so that
+    # matches_satisfaction has a real signal source.  Plan A8: chapter_summaries
+    # rows themselves don't carry a satisfaction field, which is why the legacy
+    # blob-match against (chapterType, mood, events, title) almost always
+    # missed and produced perpetual gap=20+ / pressure=high false positives.
+    runtime_dir = book_dir / "story" / "runtime"
+    if runtime_dir.is_dir():
+        for r in rows:
+            try:
+                ch_no = int(r.get("chapter", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if ch_no <= 0:
+                continue
+            analysis_path = runtime_dir / f"chapter-{ch_no:04d}.analysis.json"
+            if not analysis_path.is_file():
+                continue
+            try:
+                analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            hits = analysis.get("satisfactionHits") or []
+            if isinstance(hits, list) and hits:
+                # Don't overwrite if the row already has it (e.g. enriched
+                # upstream by a future Settler version that mirrors the field).
+                if not r.get("satisfactionHits"):
+                    r["satisfactionHits"] = hits
 
     sat_types = profile.get("satisfactionTypes") or []
     chap_types = profile.get("chapterTypes") or []

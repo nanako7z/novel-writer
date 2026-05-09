@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--file", help="path to text file")
     g.add_argument("--stdin", action="store_true")
     p.add_argument("--lang", default="zh", choices=["zh", "en"])
+    # Accepted for CLI uniformity with other gate scripts. Future versions may
+    # read book.json#sensitiveWords overrides; today the wordlists are baked in.
+    p.add_argument("--book", help="(optional, currently unused) book directory; "
+                   "reserved for per-book sensitive-word overrides")
+    p.add_argument("--json", action="store_true",
+                   help="(no-op) JSON is already the default output format")
     return p.parse_args()
 
 

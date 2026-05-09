@@ -283,6 +283,24 @@ def cmd_write(args: argparse.Namespace) -> dict:
     except json.JSONDecodeError as e:
         return {"ok": False, "error": f"invalid JSON in {src}: {e}"}
 
+    # Auto-wrap bare audit JSON.  The natural LLM workflow saves a bare audit
+    # ({passed, overall_score, issues, summary, readerExpectationSignal}) to
+    # `chapter-{NNNN}.audit-r{i}.json` — historically callers had to wrap it
+    # by hand into {chapter, round, audit, ...} before --write would accept
+    # it.  When the bare audit lives at the same path as the runtime output,
+    # the historical wrap-then-write would silently overwrite the original
+    # bare file with a wrapped one, breaking any downstream tool that read
+    # top-level `issues`.  We now auto-wrap so the same path can be passed
+    # safely (cf. plan A2).
+    auto_wrapped = False
+    if (
+        isinstance(data, dict)
+        and "audit" not in data
+        and ("overall_score" in data or "issues" in data or "passed" in data)
+    ):
+        data = {"chapter": args.chapter, "round": args.round, "audit": data}
+        auto_wrapped = True
+
     errors = _validate_payload(data, args.chapter, args.round)
     if errors:
         return {"ok": False, "errors": errors}
@@ -313,6 +331,7 @@ def cmd_write(args: argparse.Namespace) -> dict:
         "round": args.round,
         "delta": data["delta"],
         "previousRoundFound": prev is not None,
+        "autoWrapped": auto_wrapped,
     }
 
 
