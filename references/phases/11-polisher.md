@@ -6,7 +6,7 @@
 > 3. **退出条件**：`pre-polish.md` 备份 + `polish.json` 落盘；polishedContent 接管 draft；引入新 critical/block 即**回退原版**（log `polish-reverted-introduced-issues`）
 > 4. **重试规则**：n/a（单 pass，不重跑）
 
-> 移植自 inkos `packages/core/src/agents/polisher.ts`（153 行）。Polisher 是 audit 通过之后再走一道的**独立后置**润色阶段——和 Reviser 不同：Reviser 在 audit 失败时入场修结构、补 issue；Polisher 只在 audit 已经通过的稿子上磨**文字表面**——句式、段落、用词、五感、对话自然度。**严禁动情节、人设、主线**。
+> Polisher 是 audit 通过之后再走一道的**独立后置**润色阶段。和 Reviser 不同：Reviser 在 audit 失败时入场修结构、补 issue；Polisher 只在 audit 已通过的稿子上磨**文字表面**——句式、段落、用词、五感、对话自然度。**严禁动情节、人设、主线**。
 
 ---
 

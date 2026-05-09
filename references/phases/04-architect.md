@@ -51,7 +51,7 @@ Architect 出完 5 SECTION **不要立刻落盘**——先在内存里跑一轮 
 
 完整 Reviewer 系统 prompt、维度集、rubric 表、severity 定义、输出 schema、决策树、failure handling、注意事项，全部见 [references/foundation-reviewer.md](../foundation-reviewer.md)。本 phase 文件**不重复**这些规则——Architect 编排器只需要知道"出了 5 SECTION 之后必须过这道门，pass 才能落盘"。
 
-### 系统 prompt（搬自 inkos `architect.ts` L207-375，请 Claude 在心中扮演这个角色）
+### 系统 prompt
 
 ```
 你是这本书的总架构师。你的唯一输出是**散文密度的基础设定**——不是表格、不是 schema、不是条目化 bullet。v6 以后这本书的"灵气"从哪里来？从你这里来。你的散文密度决定了后面 planner 能不能读出"稀疏 memo"，writer 能不能写出活人，reviewer 能不能校准硬伤。
@@ -73,7 +73,7 @@ ${eraBlock}
 
 ## 输出结构（5 个 SECTION，严格按 === SECTION: === 分块，不要漏任何一块）
 
-## 完整性硬尺（必读，移植自 inkos `architect.ts` 完整性 guard）
+## 完整性硬尺（必读）
 你必须依次输出全部 **5 个 SECTION 块**：story_frame → volume_map → roles → book_rules → pending_hooks，不允许因为 story_frame 或 volume_map 写长了就不写后 3 段。哪怕 roles 只列 3 个角色、book_rules 只有 YAML 小块、pending_hooks 只有 3 行，也要完整输出。**只有写完 pending_hooks 最后一行才算交付**——前两段写得长之后提前停笔等价于 Architect 失败，下游 切分 / 落盘脚本会把残缺输出判为 schema-fail，必须重跑。
 
 ## 去重铁律（必读）
@@ -256,7 +256,7 @@ enableFullCastTracking: false
 3. **生成 5 个 SECTION**：严格用 `=== SECTION: <name> ===` 分隔，不要漏一块也不要多一块。
 4. **预算自检**：每个 SECTION 写完后心算字符数，超预算的部分必须自删。
 5. **去重自检**：主角弧线只能在 roles，世界铁律只能在 story_frame.段 3，节奏原则只能在 volume_map.段 5——任何其他位置出现立刻删。
-6. **5 SECTION 完整性自检**：story_frame / volume_map / roles / book_rules / pending_hooks 缺任何一段都视为 Architect 失败，必须补全后再交付（移植自 inkos `architect.ts` 完整性 guard）。
+6. **5 SECTION 完整性自检**：story_frame / volume_map / roles / book_rules / pending_hooks 缺任何一段都视为 Architect 失败，必须补全后再交付。
 7. **OKR 自检（番茄老师弈青锋）**：story_frame.段 4 末尾必须有"全书 Objective 一句话 + 可被外部观察者判定的终局状态"；volume_map.段 3 必须每卷给出 `Objective` + `Key Results`（3 条）。缺即不通过。
 
 ### 切分写入
@@ -275,7 +275,7 @@ enableFullCastTracking: false
 
 ### 权威文件（authoritative）—— Phase 5+ 主路径
 
-- `story/outline/story_frame.md` ——**顶部必须带 YAML frontmatter**（嵌入 book_rules 完整字段；移植自 inkos `buildBookRulesFromStoryFrameFrontmatter`），紧接 4 段散文（主题 / 冲突 / 世界 / 终局），≤ 3000 chars。frontmatter 是 book_rules 的**唯一权威来源**。
+- `story/outline/story_frame.md` ——**顶部必须带 YAML frontmatter**（嵌入 book_rules 完整字段），紧接 4 段散文（主题 / 冲突 / 世界 / 终局），≤ 3000 chars。frontmatter 是 book_rules 的**唯一权威来源**。
 - `story/outline/volume_map.md` ——5+1 段散文（每卷主题情绪 / 卷间钩子 / 阶段目标 / 卷尾改变 / 节奏原则），≤ 5000 chars
 - `story/roles/主要角色/<name>.md` 与 `story/roles/次要角色/<name>.md` ——一人一卡 prose，主角卡含完整 8 个 ## 子标题。**roles/ 是角色弧线的唯一权威来源**——`character_matrix.md` 不是。
 - `story/pending_hooks.md` ——12 列 Markdown 表（hook_id / 起始章节 / 类型 / 状态 / 最近推进 / 预期回收 / 回收节奏 / 上游依赖 / 回收卷 / 核心 / 半衰期 / 备注），≤ 2000 chars
@@ -314,20 +314,20 @@ Architect 重写 outline 后，下游指导 md 与新 outline 失同步——cur
 
 ## Failure handling
 
-Architect ≤ 2 轮（第 1 轮 + 必要时第 2 轮，每轮跟一次 Foundation Reviewer），按 verdict 分流：
+Architect ≤ 2 轮（每轮跟一次 Foundation Reviewer），按 verdict 分流：
 
 - **`pass`** → 切分 SECTION 落盘
-- **`revise`**（含 Reviewer 解析失败降级的 structural issue）→ `reviewFeedbackBlock`（issues + overallFeedback）注回 Architect 跑第 2 轮 + 再审；第 2 轮仍 ≠ pass 则 best-effort 落盘 + `architectStatus: "review-failed"` 写到 `story/runtime/architect-review.json`，**不再**第 3 轮
-- **`reject`**（方向性崩塌，score < 50 或多维度 < 50）→ **不落盘、不自动重试**，issues 抛给用户决策（改 brief / 题材）
+- **`revise`** → `reviewFeedbackBlock`（issues + overallFeedback）注回 Architect 跑第 2 轮；第 2 轮仍 ≠ pass 则 best-effort 落盘 + `architectStatus: "review-failed"` 写到 `story/runtime/architect-review.json`，**不再**第 3 轮
+- **`reject`**（方向性崩塌，score < 50 或多维度 < 50）→ **不落盘、不自动重试**，issues 抛给用户决策
 
-预算超限：自删后重写本 SECTION，不算重试。完整 Reviewer 决策见 [foundation-reviewer.md](../foundation-reviewer.md#failure-handling)。
+预算超限：自删后重写本 SECTION，不算重试。完整决策见 [foundation-reviewer.md](../foundation-reviewer.md#failure-handling)。
 
 ## 注意事项
 
-- **散文密度是核心**：bullet list 是失败信号；表格只在 pending_hooks / book_rules YAML 出现。
-- **去重铁律**：写完每一段问自己"这段事实有没有在另一段出现过"，有就删。
-- **不要写章号**：volume_map 只到卷级，禁止"第 17 章让他回家"这种章级布局——那是 Planner 的活。
-- **主角卡是权威**：story_frame 段 1 末尾必须以指针形式指向 `roles/主要角色/<主角>.md`，不要重复写主角弧线。
-- **eraBlock 是题材判定**：修仙 / 玄幻 / 系统流不要硬塞年份；年代 / 历史 / 重生流必须织入年份与重大历史事件。
-- **English book**：用 inkos 的 `buildEnglishFoundationPrompt` 等价英文 prompt，所有 SECTION 名保持不变（`=== SECTION: story_frame ===` 等），段落用英文写。英文路径同样必须 emit 全部 5 SECTION 完整、story_frame.段 4 末尾必须含一句 Book Objective（参 inkos `architect.ts` 中 `You MUST emit all 5 SECTION blocks in order` 的英文段）。
-- **重做时**：附加 contextBlock（"这是第 N 次架构，前次产物存在于…"）和 reviewFeedbackBlock（"上次的问题…"），让 Claude 看到历史。
+- **散文密度是核心**：bullet list 是失败信号；表格只在 pending_hooks / book_rules YAML 出现
+- **去重铁律**：写完每段问自己"这段事实有没有在另一段出现过"，有就删
+- **不要写章号**：volume_map 只到卷级；章级布局是 Planner 的活
+- **主角卡是权威**：story_frame 段 1 末尾以指针指向 `roles/主要角色/<主角>.md`，不重复写
+- **eraBlock 是题材判定**：修仙 / 玄幻 / 系统流不塞年份；年代 / 历史 / 重生流必须织入
+- **English book**：所有 SECTION 名不变，段落用英文，story_frame.段 4 末尾必须含 Book Objective
+- **重做时**：附加 contextBlock + reviewFeedbackBlock 让 Claude 看到历史

@@ -27,13 +27,13 @@ Claude 在这一阶段需要读：
 
 ## Process
 
-Claude 在心中扮演"章节长度修正器"。模式由 `chooseNormalizeMode` 决定（参 inkos `length-metrics.ts`）：
+Claude 在心中扮演"章节长度修正器"。模式由 `chooseNormalizeMode` 决定：
 
 - 当前字数 > hardMax 或 > softMax 较多 → `compress`（压缩）
 - 当前字数 < hardMin 或 < softMin 较多 → `expand`（扩写）
 - 在 soft 区间内 → `none`（直接返回原文，applied=false）
 
-### 系统 prompt（搬自 inkos `length-normalizer.ts` L69-80，请 Claude 在心中扮演这个角色）
+### 系统 prompt
 
 `compress` 模式：
 
@@ -49,7 +49,7 @@ Claude 在心中扮演"章节长度修正器"。模式由 `chooseNormalizeMode` 
 
 `expand` 模式：把第一行的 `compress` 替换为 `expand`，其余保持。
 
-### 用户消息模板（搬自 inkos L95-115）
+### 用户消息模板
 
 ```
 请对下面正文做一次{压缩|扩写}修正。

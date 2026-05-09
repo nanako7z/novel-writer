@@ -31,7 +31,7 @@ Claude 在这一阶段需要读：
 
 Reviser 有 6 个模式，每个模式定义不同的"允许动什么、不允许动什么"。Claude 必须先按决策树确定 mode，再带上对应的 system prompt 修章。
 
-### 6 模式定义（搬自 inkos `reviser.ts` L91-109）
+### 6 模式定义
 
 ```
 auto: （由系统按 issues tier 自动路由——见 buildAutoSystemPrompt）
@@ -154,7 +154,7 @@ else:
 | rework      | 场景推进与冲突组织                                | 部分（保主设定 / 大事件结果） | 否 | 段落可重组 |
 | auto        | 由 system prompt 内 tier 路由——critical 段重写 / warning 段补丁 / info 段保留 | 视 issue 而定 | 否 | 视 issue 而定 |
 
-### Auto 模式系统 prompt（verbatim，搬自 inkos `reviser.ts` L417-453 + L431-448）
+### Auto 模式系统 prompt（verbatim）
 
 `mode == "auto"` 时拼装的系统 prompt 必须包含以下三个 verbatim 段。它们是 Reviser 决定 PATCHES 还是 REVISED_CONTENT、按 tier 路由 issues、按周期相位修稿的硬绑定：
 

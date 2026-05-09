@@ -6,7 +6,7 @@
 > 3. **退出条件**：`story/runtime/chapter-{NNNN}.audit-r{i}.json` 每轮都要落盘——是下轮 Auditor / Reviser 的 load-bearing 输入
 > 4. **重试规则**：整轮 audit-revise 上限 `MAX_REVIEW_ITERATIONS = 3`（assess #0 不计）；本阶段单次 JSON 解析失败 / 空响应 → 重试 1 次（temperature 提到 0.5），仍失败人工介入
 
-> 端口自 `inkos` 的 `ContinuityAuditor`（`packages/core/src/agents/continuity.ts`）。本阶段是 audit-revise 闭环的判官：跑 37 维度审查，输出结构化 JSON，决定是否进入 reviser，或直接落盘。
+> 本阶段是 audit-revise 闭环的判官：跑 37 维度审查，输出结构化 JSON，决定是否进入 reviser，或直接落盘。
 
 ## 何时进入
 
@@ -35,22 +35,12 @@ Auditor 进入时必须能读到下列文件 / 上下文：
 - 规则与设定：`GenreProfile`（含 fatigueWords、satisfactionTypes、auditDimensions、eraResearch、numericalSystem、language）+ `book_rules.md` 的 frontmatter（含 protagonist、eraConstraints、additionalAuditDimensions、fanficMode、allowedDeviations）
 - Planner 产物：`ChapterMemo`（goal + body）、`ChapterIntent`（含 mustKeep/mustAvoid/styleEmphasis）
 - Composer 产物：`ContextPackage`（selectedContext）、`RuleStack`（layers/sections/activeOverrides）
-- 确定性闸门结果（在 LLM audit 之前已经跑过）：
-  - `scripts/ai_tell_scan.py` → 单章 AI 味 issue 列表
-  - `scripts/fatigue_scan.py` → 跨章长跨度疲劳 issue 列表（本章前 N 章窗口扫描，详见 [references/long-span-fatigue.md](../long-span-fatigue.md)）
-  - `scripts/sensitive_scan.py` → 三级敏感词命中
-  - `scripts/commitment_ledger.py` → planner 在 `## 本章 hook 账` 段声明的 advance/resolve 是否在 draft 中真的兑现。critical violation（类别 `hook 账未兑现` / `committedToChapter 未兑现`）作为 **load-bearing** 输入合并进 audit issues——不是 advisory，reviser 必须在下一轮把缺失的落地动作补回正文。详见 [references/hook-governance.md §8c](../hook-governance.md#8c-章节-hook-账commitment-ledger)。标准调用：
-
-    ```bash
-    python {SKILL_ROOT}/scripts/commitment_ledger.py \
-      --memo story/runtime/chapter_memo.md \
-      --draft story/runtime/chapter-{NNNN}.draft.md \
-      --hooks <bookDir>/story/state/hooks.json \
-      --chapter <chapterNumber>
-    ```
-
-    在 deterministic gate 链中位置：`sensitive_scan` 之后、LLM auditor 之前。命中 critical 不阻断本章主循环（reviser 会补救），但若 audit-revise 三轮后仍命中 critical → 章节标 `audit-failed-best-effort` 并把对应 issue 完整写进 chapters/index.json。
-  - `scripts/word_count.py` → 章节字数 vs `LengthSpec`（target / softMin / softMax / hardMin / hardMax）
+- 确定性闸门结果（LLM audit 之前已跑过，**每一轮都要跑**）：
+  - `ai_tell_scan.py` → 单章 AI 味 issue
+  - `fatigue_scan.py` → 跨章长跨度疲劳 issue（详见 [long-span-fatigue.md](../long-span-fatigue.md)）
+  - `sensitive_scan.py` → 三级敏感词命中
+  - `commitment_ledger.py` → 校验 `## 本章 hook 账` 声明的 advance/resolve 在 draft 中真兑现；critical violation 作为 **load-bearing** 合并进 audit issues。详见 [hook-governance.md §8c](../hook-governance.md#8c-章节-hook-账commitment-ledger)
+  - `word_count.py` → 字数 vs LengthSpec
 
 跑 `fatigue_scan.py` 的标准调用：
 

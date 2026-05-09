@@ -117,7 +117,7 @@ retrievalHints = [memo.goal, memo.outlineNode, ...memo.threadRefs].filter(truthy
 
 下层覆盖上层。冲突时以 L4 → L3 → L2 → L1 顺序裁决；同级冲突保留两条让 Writer 自己解（罕见，应在 Planner 阶段就压平）。
 
-##### overrideEdges + activeOverrides schema（搬自 inkos `models/input-governance.ts` + `utils/context-assembly.ts#buildGovernedRuleStack`）
+##### overrideEdges + activeOverrides schema
 
 下游 Writer / Continuity / Reviser 三个 prompt 都直接渲染 `ruleStack.activeOverrides`——告诉模型本章哪些上层规则被章级覆写、为什么。这两个数组是 ruleStack 的硬 schema，不能省：
 
@@ -282,7 +282,7 @@ story/runtime/rule_stack.json        # RuleStack schema (L1/L2/L3/L4 layers)
 story/runtime/chapter_trace.json     # ChapterTrace schema (audit trail)
 ```
 
-ContextPackage 形状（搬自 inkos `models/input-governance.ts`）：
+ContextPackage 形状：
 
 ```json
 {

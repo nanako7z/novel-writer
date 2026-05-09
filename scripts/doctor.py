@@ -82,6 +82,7 @@ EXPECTED_SCRIPTS = [
     "split_chapter.py",
     "export_book.py",
     "recover_chapter.py",
+    "loop_state.py",
     "cadence_check.py",
     "state_project.py",
     "hook_arbitrate.py",

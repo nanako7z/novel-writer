@@ -12,7 +12,7 @@
 
 Chapter Analyzer 的角色是**单向只读的复盘者**：它读已经定稿的章节正文与本章的 `chapter_memo.md`、audit 结果、题材 profile，做一次定性回顾，把"本章击中了哪些满足类型 / 触发了哪些节奏拍 / 留下了什么可复用桥段 / 下章 Planner 必须正面回应的信号"产出为结构化分析文件。**绝不修改章节正文、`story/state/*.json`、`pending_hooks.md` 或任何真理文件**。
 
-> 注：本阶段是 novel-writer SKILL 的扩展点（inkos 源 `chapter-analyzer.ts` 是连续性事实抽取角色，本阶段在此基础上重新定位为下章 Planner 的定性输入），与 Settler（事实增量）、Observer（事实穷举）职责正交：Settler/Observer 关心"发生了什么"，Analyzer 关心"读起来怎么样、对下一章有什么交代"。
+> Analyzer 与 Settler（事实增量）、Observer（事实穷举）职责正交：Settler/Observer 关心"发生了什么"，Analyzer 关心"读起来怎么样、对下一章有什么交代"。
 
 ## Inputs
 
@@ -32,7 +32,7 @@ Claude 在这一阶段需要读：
 
 Claude 在心中扮演"小说连续性分析师"，按下面的系统 prompt 执行。**只读不写真理文件**。
 
-### 系统 prompt（搬自 inkos `chapter-analyzer.ts` `buildSystemPrompt` 中文分支 L333-L433，请 Claude 在心中扮演这个角色）
+### 系统 prompt
 
 ```
 你是小说连续性分析师。你的任务是分析一章已完成的小说正文，从中提取所有状态变化并更新追踪文件。

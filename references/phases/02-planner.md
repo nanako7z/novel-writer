@@ -28,67 +28,22 @@ Claude 在这一阶段需要读：
 - **上章 Analyzer 反馈**：`story/runtime/chapter-{N-1}.analysis.json`（如存在）——由 [phase 13 Chapter Analyzer](13-analyzer.md) 在上章落盘后产出的定性回顾，包含 `warningsForNextChapter`、`fatigueSignals` 等下章 Planner 必须消费的硬信号
 - **上章 audit 纠偏**：`story/audit_drift.md`（如存在）——由主循环 step 11.0b 用 [`scripts/audit_drift.py`](../audit-drift.md) 把上章 audit 残留的 critical/warning issue 持久化下来，下章 Planner 必须正面回应（详见下文"上章 audit 纠偏"小节）
 
-## 上章 Analyzer 的反馈（载入与消费）
+## 上章遗留物消费（Analyzer 反馈 + audit drift）
 
-[Phase 13 Chapter Analyzer](13-analyzer.md) 在每章落盘后会产出 `story/runtime/chapter-{N-1}.analysis.json`，本阶段 Planner **必须**先尝试读这份文件（如果 `currentChapter > 1`）。
+`currentChapter > 1` 时必须先读两份上章遗留物：`story/runtime/chapter-{N-1}.analysis.json`（Analyzer 定性回顾）+ `story/audit_drift.md`（audit 残留 critical/warning）。两者的消费规则、warning → memo 段映射、冲突仲裁流程见 [planner-feedback-consumption.md](../planner-feedback-consumption.md)。
 
-**消费规则：**
+**关键约束**：
 
-1. **读取**：尝试读 `story/runtime/chapter-{N-1}.analysis.json`。
-   - 文件不存在 → 视为无定性输入，按常规走（不抛错）。
-   - 文件存在但 `warning === "analyzer-failed"` → 同上，stub 文件代表 Analyzer 跑挂了，不阻断。
-2. **`warningsForNextChapter` → 必须正面回应**：每条 warning 在生成 chapter_memo 时按以下规则映射：
-   - 形如 `"H001 已连续 3 章未推进，下章必须推一下"` → 在 `## 本章 hook 账` 的 `advance` 或 `resolve` 段落显式列出 `H001`，**不能 defer**。
-   - 形如 `"chapter_memo 承诺的『七号门实证』只兑现一半，下章需补完"` → 在 `## 该兑现的 / 暂不掀的` 段补一条「续兑现：七号门实证」。
-   - 形如 `"AI 味集中在 X 段，下章注意"` → 在 `## 不要做` 段加一条具体的避坑点。
-3. **`fatigueSignals` → 灌进 `## 不要做`**：每条 `"'冷笑' 出现 4 次"` 直接转成 `## 不要做` 里的一条「本章避免使用 '冷笑' 等上章疲劳词」。
-4. **`reusableMotifs`、`pacingBeats`、`satisfactionHits`** 是软性参考，可以参考但不强制——主要用于让 Planner 判断本章是该重复成功配方还是需要换节奏（避免连续 3 章打同一个爽点）。
-5. **冲突仲裁**：如果多条 `warningsForNextChapter` 是 `priority: "high"` 且互相挤压（例如同时要求兑现 3 个 hook + 推主线 + 补 audit critical），且本章 `chapterWordCount` 装不下 → **不要硬塞**，把冲突摘要给用户：
-   - "上章 Analyzer 给本章压了 3 条 high-priority 信号：A / B / C，估计装不下，按优先级建议留 A+B 推到下章。要不要这样？"
-   - 用户决策后再生成 memo；不要 Planner 自己悄悄丢掉信号。
-6. **不要发明 hook_id**：warning 里引用的 hook_id 必须在当前 `pending_hooks.md` 里能查到才能进 advance/resolve；查不到（已被 resolve 或被 settler 删除）就把这条 warning 转成 `## 不要做` 里的一条说明（"不要再提及 H001，已收"）。
-
-**写入位置 cheat sheet**：
-- 兑现型 warning → `## 该兑现的 / 暂不掀的`
-- hook 推进型 warning → `## 本章 hook 账`（advance / resolve）
-- 避坑型 warning + fatigueSignals → `## 不要做`
-
-## 上章 audit 纠偏（载入 `story/audit_drift.md`）
-
-主循环 step 11.0b 里 [`scripts/audit_drift.py`](../audit-drift.md) 把上章最后一轮 audit 的 critical / warning issue 落到 `story/audit_drift.md`，本阶段 Planner **必须**先尝试读它（如 `currentChapter > 1`），与 Analyzer 反馈并列消费——但语义不同：
-
-- **Analyzer 反馈**：定性回顾、节奏建议、疲劳信号（"上章这个爽点用过了"）；
-- **audit drift**：上章审计**没改干净**的硬问题（"逻辑闭环缺角"、"主角动机自相矛盾"），下章必须**正面避开或修复**。
-
-**消费规则**：
-
-1. **读取**：尝试 `python scripts/audit_drift.py --book <bookDir> read --json`。
-   - `exists: false` → 上章 audit 干净通过，没东西要管，跳过。
-   - `exists: true` → `issues` 是 `[{severity, category, description}, ...]` 数组，按下表分流。
-2. **issue → memo 映射**：
-
-   | issue.category 例子 | severity | 进 chapter_memo 哪一段 |
-   |---|---|---|
-   | `逻辑闭环` / `因果链` / `动机不通` | critical | `## 不要做` 写一条"本章必须修复：上章 X 留下的因果断点"；同时若涉及具体 hook，进 `## 本章 hook 账` advance |
-   | `人设崩坏` / `角色行为反差` | critical | `## 不要做` "本章不要再让 X 表现 Y——上章已被 audit 标为崩人设" |
-   | `节奏拖沓` / `信息倾倒` | warning | `## 当前任务` 与 `## 章尾必须发生的改变` 必须给出具体动作 / 决策；`## 日常/过渡承担什么任务` 收紧 |
-   | `重复套路` / `近 N 章雷同` | warning | `## 不要做` "本章避免重复上章 X 的桥段" |
-   | 其它 warning | warning | 一律进 `## 不要做`，原文照搬 description |
-
-3. **不要忽略 critical**：`severity === "critical"` 的 audit drift issue 必须在 memo 里有显式正面回应（不是单一一句"避免 X"——要给 Writer 具体的替代动作）。
-4. **drift 是建议性的**：与真理文件不同，drift 不强制保留——下章 Planner 消费完之后由 step 11.0b 在**新一轮** audit 后**整体重写或清空**（不用 Planner 自己删）。Planner 只读不删。
-5. **drift 与 Analyzer 反馈冲突**：若两边互相挤压（drift 要求修 critical、Analyzer 要求兑现 hook、本章字数不够），按"上章 Analyzer 的反馈" §5 同样的"上报用户决策"流程处理——不要自己悄悄丢。
-
-**写入位置（合并 cheat sheet）**：
-- audit drift critical → 优先 `## 不要做` + `## 本章 hook 账`（如涉及 hook）
-- audit drift warning → `## 不要做` + 影响 `## 当前任务` 表述
-- 与 Analyzer 反馈合流——同一段里两边的输入都列上，避免"先按 Analyzer 写完又被 drift 推翻"。
+- Analyzer warning（priority=high）必须正面回应，不能 defer 或忽略
+- audit drift critical 必须给出**具体替代动作**（不是一句"避免 X"）
+- 多条 high-priority 信号挤压且字数装不下 → 上报用户决策，**不要自己悄悄丢**
+- warning 引用的 hook_id 必须在 `pending_hooks.md` 能查到
 
 ## Process
 
 Claude 在心中扮演"创作总编"，按下面的系统 prompt 执行。
 
-### 系统 prompt（搬自 inkos `planner-prompts.ts` L9-102，请 Claude 在心中扮演这个角色）
+### 系统 prompt
 
 ```
 你是这本小说的创作总编，职责是为下一章产生一份 chapter_memo。你不写正文——你只规划这章要完成什么、兑现什么、不要做什么。下游写手（writer）会按你的 memo 扩写正文。
