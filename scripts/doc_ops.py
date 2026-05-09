@@ -314,11 +314,16 @@ def _sanitize_new_content(new_content: str, anchor: str) -> tuple[str, list[str]
       body goes in `newContent`).  Without stripping, every replace_section
       doubles the heading on disk; on the next read the file's section list
       gets a phantom new entry that future replaces can't reach.
-    - `embedded_h2_lines`: newContent contains *other* `## ` / `### ` lines
-      mid-stream.  Less harmful than the leading-anchor case but on the
-      next read those lines split the section, so we record a warning so
-      the caller can flag it.  We do NOT strip these — they may be
-      legitimate H4+ misformatted, and silent removal would lose data.
+    - `demoted_embedded_h2_lines`: newContent contains *other* `## ` / `### `
+      lines mid-stream. We demote them to `#### ` / `##### ` (one level
+      deeper than the section-split regex looks at) so they survive on disk
+      as visible sub-headings but DO NOT split the section on the next
+      read. Demote-not-delete keeps the data; the only loss is heading
+      depth, which is recoverable by hand if the author cared. Without
+      this, a single `replace_section` whose newContent embedded a stray
+      `## X` would, on next read, materialize as an independent top-level
+      section that future replaces of the original anchor can't reach,
+      and each subsequent replace would accumulate a fresh duplicate of X.
     """
     notices: list[str] = []
     if not isinstance(new_content, str):
@@ -335,17 +340,32 @@ def _sanitize_new_content(new_content: str, anchor: str) -> tuple[str, list[str]
             continue
         break
 
-    # Detect mid-stream H2/H3 lines that are NOT the original anchor (those
-    # we can't detect as accidental — they may be intended sub-sections of
-    # the body or genuine other sections; we just flag).
-    other_headings = [
-        m.group(0) for m in _HEADING_RE.finditer(text)
-        if m.group(0).strip() != anchor_stripped
-    ]
-    if other_headings:
+    # Demote mid-stream H2/H3 lines (other than the anchor itself) to H4/H5
+    # so _split_into_sections won't materialize them as independent sections
+    # on the next read. Anchor lines that somehow survived the leading-strip
+    # loop are left alone — _apply_section_op's caller decides what to do
+    # with same-anchor duplicates separately.
+    other_count = 0
+    new_lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.rstrip("\n").rstrip("\r")
+        if stripped.strip() == anchor_stripped:
+            new_lines.append(line)
+            continue
+        if stripped.startswith("### "):
+            new_lines.append("##### " + stripped[4:] + line[len(stripped):])
+            other_count += 1
+        elif stripped.startswith("## "):
+            new_lines.append("#### " + stripped[3:] + line[len(stripped):])
+            other_count += 1
+        else:
+            new_lines.append(line)
+    if other_count:
+        text = "".join(new_lines)
         notices.append(
-            f"embedded_h2_lines: {len(other_headings)} non-anchor heading(s) "
-            f"in newContent; they will split the section on next read"
+            f"demoted_embedded_h2_lines: {other_count} non-anchor heading(s) "
+            f"in newContent demoted to H4/H5 (would have split the section "
+            f"on next read)"
         )
 
     return text, notices
