@@ -1,5 +1,11 @@
 # Phase 08: Length Normalizer（单次长度修正）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：`draft.md` 已落盘且 `word_count.py` 判定 `status not in {"in-soft"}`；本阶段是有条件触发，长度在 soft range 内**不得**强行入场
+> 2. **本阶段必跑**：单次修正最多 2 passes；**禁止**借机改情节 / 删伏笔，只动表层冗余 / 缩写 / 扩展感官细节
+> 3. **退出条件**：`story/runtime/chapter-{NNNN}.normalized.md` 落盘
+> 4. **重试规则**：n/a（单 pass 阶段；2 passes 后仍漂出 hard range 抛给用户）
+
 ## 何时进入
 
 主循环在 Settler 之后、Auditor 之前调到这里。先用 `scripts/word_count.py` 量本章字数（中文按字符、英文按词），与 LengthSpec 比对：

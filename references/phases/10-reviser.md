@@ -1,5 +1,11 @@
 # Phase 10: Reviser（按模式修章）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：`allIssues = audit.issues + ai_tells + sensitive + commitment_ledger.violations` 已合并；`previousRounds` + `recurringIssues`（i > 0 时来自 `audit_round_log.py --analyze`）已就绪
+> 2. **本阶段必跑**：按 `chooseReviseMode(allIssues)` 选 mode；**stagnation escalation 必须执行**（同一 critical issue 连续 2 轮没修掉 → polish→rewrite / rewrite→rework，rework / anti-detect / spot-fix 不再升级）；改完若长度漂移再单次 normalize
+> 3. **退出条件**：revised draft + `reviser_action` 字段（mode / target_issues / outcome）写入本轮 audit-r{i}.json
+> 4. **重试规则**：整轮 audit-revise 上限 3；passed 时 `outcome=skipped`，**禁止**伪造 applied
+
 ## 何时进入
 
 主循环在 Auditor 给出 issues 后调到这里。Auditor 报告 critical / warning issue 数 ≥ 1（且整体分提升预期 ≥ 3 分）→ 进 Reviser。如果 Auditor 报告 critical=0 且 warning ≤ 阈值 → 跳过 Reviser 直接落盘。
@@ -120,9 +126,10 @@ patches 路径的好处：
 ### 模式选择决策树
 
 > 用户显式指定 mode → 直接用。否则按下面顺序判定：
+> **spot-fix 触发阈值**（量化）：用户给出明确行号 / 段落引用 / "把 XX 改成 YY" 的精确替换对，**或**待修问题 ≤ 2 处独立点且彼此无连锁影响 → 才走 spot-fix；用户措辞模糊（"这段不够自然" / "这一段改一下"）必须先问清范围，**不要**默认 spot-fix。
 
 ```
-if issues 全是用户指定的单点（"把第 3 段那句改一下"）：
+if issues 全是用户指定的单点（"把第 3 段那句改一下"，含明确行号 / 精确替换对 / ≤ 2 处独立点）：
     → spot-fix
 elif issues 由 ai_tell_scan / sensitive_scan 主导（AI 味 / 敏感词专项）：
     → anti-detect
@@ -255,9 +262,12 @@ audit-revise ≤ 3 轮，每轮 audit + 闸门 + reviser 动作落到 `story/run
 |---|---|
 | `polish` | `rewrite` |
 | `rewrite` | `rework` |
-| `rework` / `anti-detect` / `spot-fix` | 不变（已最重 / 专项 / 用户指明） |
+| `anti-detect` / `spot-fix` | 不变（专项 / 用户指明） |
+| `rework` | **硬终止回环**（见下方） |
 
 Reviser 决策树会被这层覆盖；prompt 追加："本章连续 N 轮 critical 未解决，本轮强制 mode=Y，放开动作半径。"
+
+**rework 仍 stagnation 的硬终止**：上轮 mode 已是 `rework` 且 critical 仍 stagnation → orchestration step 7c.1.1 会**跳出 audit-revise 回环**（不允许第 3 轮 rework），把当前最佳版本落盘，状态记 `audit-failed-best-effort`，未解决 critical 写进 `chapters/index.json` 的 `auditIssues` 让作者决策（改 chapter_memo 后重新 Planner / 整章推倒 / 接受 best-effort）。Reviser 不要在自己 prompt 里"自作主张再来一轮 rework"——回环终止由 orchestration 强制。
 
 ### 契约 3：target_issues 必填
 

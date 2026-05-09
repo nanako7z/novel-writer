@@ -1,5 +1,11 @@
 # Phase 03: Composer（确定性上下文装配）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：`story/runtime/chapter_memo.md`（step 2 Planner 产物的规范名；脚本硬编码读这个名字）已落盘
+> 2. **本阶段必跑**：第 0 步 `memory_retrieve.py --memo <chapter_memo.md>` **必跑**——**禁止**凭印象塞 context；30+ 章后全量喂 chapter_summaries 必爆。`context_budget.py` 自动跑；hard-overflow 抛给用户决策
+> 3. **退出条件**：`chapter-{NNNN}.context.json` + `.rule-stack.json` + `.trace.json` 三件套全落盘后才能进 step 4 / 5
+> 4. **重试规则**：本阶段无 LLM；脚本失败照实回报用户，**禁止**自己造 context 蒙混
+
 ## 何时进入
 
 主循环 step 3，Planner 之后、Architect/Writer 之前。**确定性流程，不调 LLM**——把真理文件按章节焦点筛一遍，拼成三份 runtime 工件（contextPackage / ruleStack / chapterTrace）落到 `story/runtime/` 给 Writer 用。

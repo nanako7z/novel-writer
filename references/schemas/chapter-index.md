@@ -46,7 +46,7 @@ ChapterMeta = {
 
 | 状态 | 含义 | 何时进入 |
 |---|---|---|
-| `card-generated` | 已有 chapter_memo，未开始写 | Planner 落盘 chapter_memo.intent.md 后 |
+| `card-generated` | 已有 chapter_memo，未开始写 | Planner 落盘 chapter_memo.md 后 |
 | `drafting` | 正在写正文 | Writer 跑到一半（runtime/.draft.md 存在） |
 | `drafted` | 写完了，等长度治理 / audit | Writer 完成、Normalize 之前 |
 | `auditing` | 正在审 | Auditor 跑到一半 |

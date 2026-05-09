@@ -1,5 +1,11 @@
 # Phase 05 — Writer（写正文）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：`composed_context.md` / `chapter_memo.md` / `prose_density.md` / `style_guide.md` **全读**；fanfic 模式下 `fanfic_canon.md` 也读
+> 2. **本阶段必跑**：sentinel 输出 4 块（`=== CHAPTER_TITLE ===` / `=== CHAPTER_CONTENT ===` / `=== CHAPTER_SUMMARY ===` / `=== POSTWRITE_ERRORS ===`）**一块都不能缺**；落盘后**立即**跑 step 5b `writer_parse.py --strict` + step 5c `post_write_validate.py`，**禁止**跳进 Normalize / Audit
+> 3. **退出条件**：`story/raw_writer/chapter-{NNNN}.md`（含全部 sentinel）+ `story/runtime/chapter-{NNNN}.draft.md`（拆解后的 body）落盘
+> 4. **重试规则**：parse 缺 sentinel ≤ 2 次重输；post-write critical 重写 ≤ 1 次，必须把 `postWriteFeedback` 注入；仍 critical 抛错给用户，不进 Normalizer
+
 > 移植自 inkos `packages/core/src/agents/writer.ts` 与 `writer-prompts.ts`（~865 行系统 prompt）。本文件是整套 SKILL 的**核心**：Writer 阶段的全部 13-14 个可拼装段落按当前章节状态 / `book.json` / `book_rules` / fanfic 标记 / 风格指纹按需组合。
 >
 > 因系统 prompt 拼装段较多，本 phase 文件已**拆分为 1 主调度器 + 6 个 sub-reference**。本文件保留概览 + 拼装顺序 + 失败处理 + 注意事项；各段 verbatim prompt 文本与启用条件归到对应 sub-reference 文件。

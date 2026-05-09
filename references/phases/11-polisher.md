@@ -1,5 +1,11 @@
 # Phase 11 — Polisher（文字层打磨）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：audit 真正过线（`overall_score >= 88` 且 `passed`）；借线（85-87）**直接跳过**，不冒险；audit 未过线**严禁**入场（让 Reviser 兜底）
+> 2. **本阶段必跑**：单 pass，磨表面不改结构；**禁止**开回环；polish 后 `ai_tell_scan` + `sensitive_scan` 必须复检
+> 3. **退出条件**：`pre-polish.md` 备份 + `polish.json` 落盘；polishedContent 接管 draft；引入新 critical/block 即**回退原版**（log `polish-reverted-introduced-issues`）
+> 4. **重试规则**：n/a（单 pass，不重跑）
+
 > 移植自 inkos `packages/core/src/agents/polisher.ts`（153 行）。Polisher 是 audit 通过之后再走一道的**独立后置**润色阶段——和 Reviser 不同：Reviser 在 audit 失败时入场修结构、补 issue；Polisher 只在 audit 已经通过的稿子上磨**文字表面**——句式、段落、用词、五感、对话自然度。**严禁动情节、人设、主线**。
 
 ---
@@ -17,7 +23,7 @@
 Polisher 这一阶段读以下文件：
 
 1. **章节正文** —— 直接读 `story/runtime/chapter-{NNNN}.normalized.md`（audit 通过的最终态）。注意：此时章节**尚未**写到 `chapters/{NNNN}.md`，Polisher 的输出才是最终落盘版本。
-2. `story/runtime/chapter-{NNNN}.intent.md`（chapter_memo）—— 用于让 Polisher 知道"本章要兑现什么"，避免润色时不小心把已兑现的情绪缺口磨没了。本段在 system prompt 之外作为 user message 注入（详见 §Process）。
+2. `story/runtime/chapter_memo.md` —— 用于让 Polisher 知道"本章要兑现什么"，避免润色时不小心把已兑现的情绪缺口磨没了。本段在 system prompt 之外作为 user message 注入（详见 §Process）。
 3. `genre_profiles/<genre>.md` 的 `fatigueWords` 列表 —— Polisher 在打磨用词时需要避让这些题材专属高疲劳词（同一章不要再叠加）。
 4. `book.json#language` —— 决定走中文 system prompt 还是英文 system prompt。
 5. （可选）`story/style_guide.md` —— 让 Polisher 知道用户对文风的偏好，避免润色把作者风格磨平。

@@ -1,5 +1,11 @@
 # Phase 04: Architect（散文密度基础设定）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：触发条件成立（首章 + story_frame 占位 / 卷尾 `arcTransition` / 用户"重做架构"）；fanfic 模式下 `fanfic_canon.md` 已抽取
+> 2. **本阶段必跑**：Architect ↔ [Foundation Reviewer](../foundation-reviewer.md) 回环 ≤ 2 轮，verdict=revise 时把 issues 注回；verdict=pass 后**必须**跑 Cascade docOps `apply_delta.py --delta architect-cascade.delta.json`（同步下游 current_focus / roles）
+> 3. **退出条件**：`story_frame.md` + `outline/*` + `roles/*` + `pending_hooks.md` + `architect-cascade.applied-{NNNN}.delta.json` 全落盘
+> 4. **重试规则**：≤ 2 轮 reviewer 回环，注入具体 issues；reject 直接中止主循环让用户决策，**不许**强行 pass
+
 ## 何时进入 / 立项触发
 
 仅在以下三种场景触发：

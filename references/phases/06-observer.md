@@ -1,5 +1,11 @@
 # Phase 06: Observer（事实抽取）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：本章已通过 audit-revise 闭环（step 7 退出）的 `draft`（最终 normalized 稿）就位；**禁止**用 raw_writer 原文跳过 audit 直接喂 Observer
+> 2. **本阶段必跑**：OBSERVATIONS 块覆盖 9 类事实（角色 / 资源 / 关系 / 钩子兑现 / 钩子新增 / 场景 / 时间线 / 情绪 / 重要细节）一类不漏——只记正文真发生的，**禁止**从大纲推断
+> 3. **退出条件**：`story/runtime/observations.md` 落盘后才能进 step 9 Settler
+> 4. **重试规则**：OBSERVATIONS 解析失败重试 ≤ 1 次，注入"上次缺哪一类"的具体反馈；仍失败降级——跳过 observations，由 Settler 从原文抽取
+
 ## 何时进入
 
 主循环 step 8，Writer 之后、Settler 之前。从正文**穷举**可观察事实变化（9 类），输出 `=== OBSERVATIONS ===` 块给 Settler 增量更新真理文件。Observer 自身不写真理文件。

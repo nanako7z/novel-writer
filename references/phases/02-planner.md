@@ -1,5 +1,11 @@
 # Phase 02: Planner（章节规划 / chapter_memo 生成）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：step 1 的 `chapterNo` / `lengthSpec` 已就绪；`currentChapter > 1` 时上章 `chapter-{N-1}.analysis.json`（Analyzer 喂料）+ `story/audit_drift.md`（如存在）**必须先读**——上章 Analyzer 反馈 + audit 残留 critical 是 Planner 的硬输入，跳读直接出锅。注意：`docops_drift.json` 不是 Planner 的输入，它是 Settler 的喂料
+> 2. **本阶段必跑**：`cadence_check.py`（自动调）+ chapter_memo schema 校验；`MEMO_RETRY_LIMIT` 内重跑必须注入 schema 错位 / 缺块的具体反馈
+> 3. **退出条件**：`story/runtime/chapter_memo.md`（YAML+md，含 `## 本章 hook 账` 段；覆盖式写入，下游脚本如 `apply_delta` / `memory_retrieve` / `commitment_ledger` 全部硬编码读这个名字）落盘后才能进 step 3
+> 4. **重试规则**：≤ 3 次，每次 prompt 必须显式带"上次失败原因"，**禁止**裸重发
+
 ## 何时进入
 
 主循环 step 2，Composer 之前。每章必跑，产物 `story/runtime/chapter_memo.md`——下游 Composer 装上下文 + Writer 按 memo 扩写。Planner 不写正文。

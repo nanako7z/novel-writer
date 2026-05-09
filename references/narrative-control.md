@@ -6,7 +6,7 @@
 
 写作主循环里有一些"含治理元数据"的文本会被 Composer 拼进 Writer 的 prompt 里——典型来源：
 
-- `chapter_memo.md` / `chapter_intent.md`：里头会出现 `H001` / `kebab-case-hook-slug` 这类 hook ID 与 hook slug
+- `chapter_memo.md`：里头会出现 `H001` / `kebab-case-hook-slug` 这类 hook ID 与 hook slug
 - 滑窗记忆的相关章摘录（含 `第 12 章` / `Chapter 12` 这种章节 ref）
 - Planner 给的"前几章发生了什么"段落（带"前几章"、"本章要做的是"这种系统语气）
 - 风格分析的 evidence 片段（带"仿佛 / 似乎"这种 AI 转折标志）

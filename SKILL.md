@@ -117,6 +117,8 @@ Plan → Compose（含 memory_retrieve 滑窗）→ (首章/卷尾才 Architect)
 
 ## 单点指令（不进主循环）
 
+**措辞模糊时先问一句再做**：用户说"改一下这段" / "我觉得这段不够自然" / "这段表达不太好"——既可能是整章 polish，也可能是定点修一两句。先用一句问句确认范围（"是想整章润一遍，还是只动你指出的那一小段？"）再决定走 phase 11 polisher / phase 10 polish 模式 / phase 10 spot-fix。**不要**默认整章改——半径选错了既浪费 token，又容易把作者满意的段落改坏。
+
 | 用户大致这么说 | 做什么 |
 |---|---|
 | "审一下第 N 章" | 只跑 [phase 09](references/phases/09-auditor.md)；输出审计结果，不动正文 |
@@ -263,7 +265,24 @@ python {SKILL_ROOT}/scripts/apply_delta.py --book <bookDir> --delta <runtime/cha
 - `stale-scan` → 不阻断，写回 `stale: true` 供后续 Planner 参考
 - 调试不写盘：`scripts/settler_parse.py --input <raw.md> --mode raw --out /tmp/d.json`
 
+**原子回滚硬承诺**：3 阶段 parser（lenient → soft-fix → strict schema）+ 字段路由的任一阶段失败 → **整批 delta 全部不应用**，已写出的临时改动必须回滚（实现侧靠"先暂存到 staging，全过才 swap 到真理文件"）。绝不允许"hookOps 写进去了 / docOps 写一半 schema 又拒"的半提交。Settler 重跑相同 delta 应是**幂等**——若上次失败已被完整回滚，重跑等同于第一次跑；若上次成功，重跑必须检测出"已应用"并 no-op（看 `manifest.lastAppliedChapter` + `appliedDeltaHash`），不重复推进 hookOps 的 lastAdvancedChapter / 不重复 append cliffhangerEntry。
+
 钩子治理逻辑见 [references/hook-governance.md](references/hook-governance.md)。直写 `story/state/*.json` 视为脏写——见主循环不变量 #1。
+
+### 伏笔 / hook / cliffhanger 术语表
+
+避免散落在多 phase 文档里的同义词混淆，以本表为准：
+
+| 术语 | 含义 | 来源 / 存放 | 谁更新 |
+|---|---|---|---|
+| **伏笔（hook）** | 一条延续到后续章节、有具体回收方向的未解叙事承诺 | `story/pending_hooks.md`（人读）+ `story/state/hooks.json`（机读，权威） | Settler 走 `apply_delta` 落 hookOps |
+| **hookCandidate** | 本章新出现、尚未拿到正式 hookId 的候选 | Settler delta 的 `newHookCandidates` 字段 | Settler 产候选；`hook_governance promote-pass` 仲裁推升为正式 hook |
+| **payoffTiming** | hook 的**语义节奏档位**（不是具体章号）：`immediate` / `near-term` / `mid-arc` / `slow-burn` / `endgame`。**禁止**写章号 | hooks.json 字段 | Settler 在 hookOps.upsert 里写；Architect 大改时重置 |
+| **committedToChapter** | 给某条 hook 强绑定的**最迟兑现章号**（实指承诺） | hooks.json 字段（可选） | Planner 写 `## 本章 hook 账` 时声明；commitment_ledger 校验本章是否兑现 |
+| **cliffhanger** | 章末勾子（章末最后一段的收尾形态），12 类枚举 + intensity 1-5 | `story/state/cliffhanger_history.json` | Settler 必输出 `cliffhangerEntry`；Planner 读最近 6 条防套路重复 |
+| **foreshadow / 揭 1 埋 1** | 写作动作（"每章揭 1 旧 hook + 埋 1 新 hook"的节奏目标）；不是数据字段 | Planner / Auditor 维度内部 | 不直接落盘，体现在 hookActivity 字段 |
+
+**简言之**：伏笔 = hook（同一概念中英对照）；hooks.json 是权威，pending_hooks.md 是人读视图；payoffTiming 是档位不是章号；cliffhanger 是章末写法分类，与 hook 是不同维度——一个 cliffhanger 章可以同时埋 / 揭多条 hook。
 
 ## 规则栈与题材 profile
 
@@ -316,10 +335,36 @@ python {SKILL_ROOT}/scripts/memory_retrieve.py \
 
 脚本入口去"单点指令"表查；阶段内细节去对应 phase 文件查。
 
+## 流程红线（不跳步硬尺）
+
+进入主循环前先回答以下 5 个问题——任何一个答"不知道"都说明你**不该开始**，先回去读对应 phase 文件：
+
+1. 我现在要进入主循环的哪一步？（编号 1–13）
+2. 上一步的产物落在 `story/runtime/` 哪个文件里？我读了吗？
+3. 这一步的输出文件名是什么？要不要走 `apply_delta.py` 才能动真理文件？
+4. 这一步内部有几个**确定性脚本闸门**（例如 step 5 的 `writer_parse` + `post_write_validate`；step 7 的 `ai_tell_scan` + `sensitive_scan` + `commitment_ledger`）？我都跑了吗？
+5. 我准备跳过哪一步？为什么跳？（**默认禁止**——只有 [00-orchestration.md](references/phases/00-orchestration.md) "何时跳过主循环" 列出的四种情况允许；用户催"快点写"**不**是允许跳的理由）
+
+**绝不跳的最小集**（任意一项缺失都会让真理文件污染或下章 Planner 喂料断流）：
+
+- step 5b/5c：`writer_parse` + `post_write_validate`（Writer 落盘后的 sentinel 拆分 + 机械层闸门）
+- step 7：audit-revise 整轮闭环（即便单轮就过线也要落 `audit-r0.json`）
+- step 7a：`ai_tell_scan` + `sensitive_scan` + `commitment_ledger`（**每一轮都跑**，不是只第一轮）
+- step 9 + 10：Settler 主动 5 项 + `apply_delta`（直接编辑 `story/state/*.json` = 脏写）
+- step 10.1：`hook_governance --command promote-pass`（让本章新 hook 在下章 Composer 看到前过门槛）
+- step 11：`chapters/{NNNN}.md` + `chapter_index.py add`（任一缺失都让 `inkos review list` 看不见这章）
+- step 11.0a：`snapshot_state.py create`（回滚兜底；不喂下章但回不去就是回不去）
+- step 11.0b：`audit_drift.py write`（喂下章 **Planner**，承接本章未改干净的 critical/warning）
+- step 11.0c：`docops_drift.py --write`（喂下章 **Settler**，建议性的指导 md 漂移候选）
+- step 11.05：Chapter Analyzer（写 stub 也要写，**不允许**直接不调用）
+- 任一阶段重试：必须把上次失败原因（schema 错位 / 治理 issue / parser feedback）注入下次 prompt——**不允许**只重发原 prompt 让 LLM 再猜（详见主循环不变量 #8）
+
+每个 phase 文件顶部都有一个 ⛔ **硬约束** 块——LLM 单读某个 phase md 时也必须先读它。orchestration 不变量与每个 phase 顶部硬约束块互为冗余，谁丢都不行。
+
 ## 注意事项
 
 - **照搬 inkos 系统 prompt**：每个 phase 文件里的"系统 prompt"块都从 inkos 源码搬来——整段照用，改 prompt 等于改风格基线。
-- **不跳步**：用户催"快点写"也按主循环走——跳过 audit/observer 会让真理文件越写越脏，后面无法继续创作。
+- **不跳步**：详见 §流程红线。用户催"快点写"也按主循环走，跳过 audit/observer 会让真理文件越写越脏，后面无法继续创作。
 - **失败如实回报**：Planner / Architect / audit-revise 都内置重试上限；到达上限仍失败，告诉用户哪里不通过，不伪造通过。
 - **保持中文**：面向作者和角色的文本都是中文，脚本日志可以英文。
 - **不写 README**：用法直接看本 SKILL.md。

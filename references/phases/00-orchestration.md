@@ -20,6 +20,20 @@
 
 下面的伪代码用于"写下一章"。请严格按顺序执行；除非显式说明，前一阶段产物落盘后才能进入下一阶段。
 
+### 主循环 preflight（动手前逐项打钩，缺一不可）
+
+每次进入 `writeNextChapter` 前，先在心里跑这张清单——任何一项答"不"，**回去补，不许进 step 2**：
+
+- [ ] 已读 `story/state/manifest.json#lastAppliedChapter` 算出 `chapterNo`？
+- [ ] 已确认 `book.json` / `inkos.json` 存在、未在 `book_lock.py` 锁定状态？
+- [ ] 上章的 `chapter-{NNNN-1}.delta.json` 已 apply 成功（`manifest.lastAppliedChapter == chapterNo - 1`）？
+- [ ] 上章的 `audit_drift.md` / `docops_drift.json` 已生成（如有）——本章 Planner / Settler 要消费的喂料？
+- [ ] 我清楚这一章是常规章 / 首章 / 卷尾 / 卷切——不同分支会触发 Architect / volume-payoff，不能漏判？
+- [ ] 我准备好从 step 2 走到 step 11.05（含所有子步骤），不会"写完就交"提前退出？
+
+进入 step 2 后，每完成一个 step 在脑内打钩：**没打钩前，下一 step 的工具调用都是错的**。
+
+
 ```pseudocode
 function writeNextChapter(book):
     # ── 1. 准备阶段 ────────────────────────────────────────
@@ -37,7 +51,7 @@ function writeNextChapter(book):
         recent chapter_summaries (≤ 6 条)
     )
     # 失败重试 ≤ 3 次
-    # 落盘：story/runtime/chapter-{NNNN}.intent.md（YAML+md）
+    # 落盘：story/runtime/chapter_memo.md（YAML+md，覆盖式写入；下游所有脚本硬编码读这个名字）
 
     # ── 3. Compose ─────────────────────────────────────────
     # references/phases/03-composer.md（无 LLM）
@@ -130,6 +144,12 @@ function writeNextChapter(book):
     EPSILON = 3                    # 增益 < 3 即退出
     PASS = 85                      # 分数线
     MAX_ITER = 3
+    # ── 7-preflight. 每轮进入前必确认（防止漏跑确定性闸门）────
+    # 第 i 轮开始时，必须确认：
+    #   · ai_tell_scan / sensitive_scan / commitment_ledger 三个脚本本轮**都会跑**（不是只第一轮）
+    #   · i > 0 时，audit-r{i-1}.json 已落盘可读（前一轮 7e 的产物）
+    #   · i > 0 时，audit_round_log.py --analyze 已跑过取 stagnation/recurringIssues
+    #   · 准备好把 detGates 整体拼回 allIssues——不允许只把 Auditor.issues 当作全集喂 Reviser
     while iter < MAX_ITER:
         # 7.0 进入 i > 0 时先做跨轮分析：检测 stagnation（同一 critical
         #     issue 连续 2 轮没被修掉 → 说明上一轮 reviser 力度不够，
@@ -190,6 +210,16 @@ function writeNextChapter(book):
                     log "audit-r{iter}: stagnation, escalating "
                         "{mode} → {escalation[mode]}"
                     mode = escalation[mode]
+                elif mode == "rework":
+                    # 7c.1.1 rework 仍 stagnation → 硬终止回环，不允许第 3 轮 rework
+                    # 标 audit-failed-best-effort，把未解决 critical 写进
+                    # chapters/index.json 让作者决策（改 Planner / 整章推倒 /
+                    # 接受 best-effort）。绝不继续回环。
+                    log "audit-r{iter}: stagnation under rework, abort loop"
+                    reviserAction = {mode: "rework", target_issues: [],
+                                     outcome: "skipped-stagnation-abort"}
+                    passed = false
+                    break  # 跳出 while 循环，进 step 7.5
             # 7c.2 Reviser 必须看过 previousRounds + recurringIssues。
             previousRounds = scripts/audit_round_log.py --book <bookDir> \
                                 --chapter chapterNo --list --json
@@ -245,7 +275,8 @@ function writeNextChapter(book):
     # ── 8. Observe ─────────────────────────────────────────
     # references/phases/06-observer.md
     observations = runObserver(draft, current truth files)
-    # 落盘：临时变量；进 Settler 不单独落盘
+    # 落盘：story/runtime/observations.md（覆盖式；下一章会被覆盖）；
+    # Settler 必读这份文件作为 user 消息的 observations 块
 
     # ── 9. Settle (产出 RuntimeStateDelta) ───────────────────
     # references/phases/07-settler.md
@@ -271,6 +302,11 @@ function writeNextChapter(book):
         #  · delta 不合规 schema → 退回 settler 重写一次
         #  · result.hookGovernanceBlocked == True → 治理 critical（如 depends_on 环、
         #    pending_hooks.md 引用对不上）→ 让 Settler 改 delta，不能强落盘
+        # 原子保证：apply_delta 任一阶段失败 → 真理文件回到 delta 应用前的状态
+        # （staging 未 swap 即丢弃）。Settler 重跑时把上一份 delta 当作"从未应用"
+        # 处理；prompt 必须显式注入 result.parserFeedback / governanceFeedback，
+        # 不允许裸重发原 prompt。重跑产物若与上次同 hash，apply_delta 检测到
+        # manifest.appliedDeltaHash 命中 → no-op 返回，避免重复推进 hookOps。
         delta = runSettlerWithRetry(governanceFeedback=result.hookGovernance.validate.issues)
         retry once
 
@@ -345,6 +381,8 @@ function writeNextChapter(book):
     # 到 story/runtime/docops_drift.json，下章 Settler 装配 prompt 时拼入
     python scripts/docops_drift.py --book <bookDir> --window 6 --write
     # 失败非 fatal；无候选时脚本自动删旧文件
+    # 消费规则：下章 Settler 必须**显式处置**每条候选——改 / 不改都要在 docOps
+    # 或 POST_SETTLEMENT 留理由，详见 [07-settler.md §"上章 docops_drift 候选的消费规则"](07-settler.md)
 
     # ── 11.05 Chapter Analyzer（post-persist 单向只读回顾）─────
     # references/phases/13-analyzer.md
@@ -352,7 +390,7 @@ function writeNextChapter(book):
     # 不修改 chapters/* / story/state/* —— 与 Settler 的事实增量分工
     analysis = runChapterAnalyzer(
         chapterFile = chapters/{NNNN}.md,
-        chapterMemo = story/runtime/chapter_memo.md OR chapter-{NNNN}.intent.md,
+        chapterMemo = story/runtime/chapter_memo.md,
         auditResult = chapter-{NNNN}.audit.json (可选),
         observations = observations.md (可选),
         hooksSnapshot = hooks.json, genreProfile, bookConfig = book.json
@@ -409,6 +447,7 @@ function writeNextChapter(book):
 5. **任何阶段的 LLM 输出若解析失败，重试 ≤ 该阶段上限（Planner 3、Architect 2、audit-revise 整轮 3）**，不要无限重试。
 6. **Reflector 不是单独阶段**——README 提到了，但源码里它的职责并入了 audit-revise loop（"反思+修改"是同一阶段的两面）；本 SKILL 也合并不单列。
 7. **Chapter Analyzer (step 11.05, [13-analyzer.md](13-analyzer.md)) 是单向只读**——它只读已定稿的本章正文与配套 runtime/state，产物只有 `story/runtime/chapter-{NNNN}.analysis.json` 一份，**不**修改 `chapters/*`、`story/state/*` 或 `pending_hooks.md`。失败也不阻断主循环（写 stub），区别于 Auditor / Settler 这两个 load-bearing 阶段。
+8. **每个 phase 文件入口的"⛔ 硬约束"块是 load-bearing 的**——LLM 单读某个 phase md 也必须先读它顶部的"⛔ 硬约束 / 不跳步"块；orchestration 里的不变量与每个 phase 顶部的硬约束块**互为冗余，谁丢都不行**。如发现某 phase 文件顶部缺这个块，先补块再动手。
 
 ## 何时**跳过**主循环
 

@@ -1,5 +1,11 @@
 # Phase 09 — Auditor（章节审计）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：`draft.md` 已落（5c post-write 通过 / 8 normalize 后）；i > 0 时 `audit-r{i-1}.json` **必读**——不读就判不出"上轮该修的 issue 是否仍在"，也跑不了 stagnation 检测
+> 2. **本阶段必跑**：37 维按 genre profile 过滤后**全跑**（**禁止**因"看着还行"裁剪维度）；本轮 `ai_tell_scan` + `sensitive_scan` + `commitment_ledger` **每一轮都要跑**（不是只第一轮）
+> 3. **退出条件**：`story/runtime/chapter-{NNNN}.audit-r{i}.json` 每轮都要落盘——是下轮 Auditor / Reviser 的 load-bearing 输入
+> 4. **重试规则**：整轮 audit-revise 上限 `MAX_REVIEW_ITERATIONS = 3`（assess #0 不计）；本阶段单次 JSON 解析失败 / 空响应 → 重试 1 次（temperature 提到 0.5），仍失败人工介入
+
 > 端口自 `inkos` 的 `ContinuityAuditor`（`packages/core/src/agents/continuity.ts`）。本阶段是 audit-revise 闭环的判官：跑 37 维度审查，输出结构化 JSON，决定是否进入 reviser，或直接落盘。
 
 ## 何时进入

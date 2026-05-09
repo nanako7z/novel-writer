@@ -1,5 +1,11 @@
 # Phase 12 — Consolidator（卷级摘要压缩 / 历史归档）
 
+> ⛔ **硬约束 / 不跳步**：
+> 1. **前置**：用户**明确点头**（重写 `chapter_summaries.json` 是有损操作）；`consolidate_check.py` 显示 `shouldConsolidate=true`；`snapshot_state.py create --milestone` 已建好兜底快照
+> 2. **本阶段必跑**：卷压缩 + step 4 `hook_governance --command promote-pass` **必跑一次**（advancedCount 变化需重判 promoted flag）
+> 3. **退出条件**：`volume_summaries.md` 更新 + `story/archive/volume-{N}.json` 归档 + 活跃 `chapter_summaries.json` 仅留最新卷
+> 4. **重试规则**：用户审过再落盘；**禁止**自动跑（绕过用户确认 = 数据丢失风险）
+
 > 移植自 inkos `packages/core/src/agents/consolidator.ts`（218 行）。Consolidator **不是** writeNextChapter 主循环里的常驻阶段，而是**手动触发的侧流**——当书写到一定规模、`chapter_summaries.json` 行数够多、且至少有一卷已完结时，把已完结卷的逐章摘要压成一段**卷级叙事段落**；该卷的逐行明细归档到 `story/archive/volume-{N}.json`，活跃 `chapter_summaries.json` 只保留**最新（未完）卷**的逐行明细。
 
 它**和 [memory_retrieve.py](../memory-retrieval.md) 互补**：memory_retrieve 决定"哪些行进 Composer context"（横切——选最近 N 章 + 命中 anchor 的旧章），Consolidator 改变"远端历史的形态"（纵切——把整卷压成一段散文）。100+ 章后两者叠加才能让 prompt 不爆。
